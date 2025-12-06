@@ -21,10 +21,10 @@ class STANClusterClient:
         source = textwrap.dedent(inspect.getsource(func))
         return source
 
-    def submit_job(self, func: Callable, args: list, gpu_required: bool = False) -> Dict[str, Any]:
+    def submit_job(self, func: Callable, args: list, job_type: str = "compute", gpu_required: bool = False) -> Dict[str, Any]:
         """
         Submit a function to the cluster.
-        Blocks until completion by default (ODIN behavior).
+        job_type: 'compute' (default), 'gpu_train', 'gpu_infer', 'io_heavy'
         """
         if isinstance(func, str):
             code = func
@@ -33,11 +33,16 @@ class STANClusterClient:
             code = self._serialize_function(func)
             entrypoint = func.__name__
 
+        # Auto-detect GPU requirement from job_type if not explicitly set
+        if job_type in ["gpu_train", "gpu_infer"]:
+            gpu_required = True
+
         payload = {
             "code": code,
             "entrypoint": entrypoint,
             "args": list(args),
-            "requires_gpu": gpu_required
+            "requires_gpu": gpu_required,
+            "job_type": job_type
         }
         
         try:

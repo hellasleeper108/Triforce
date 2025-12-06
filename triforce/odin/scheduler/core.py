@@ -44,21 +44,33 @@ class Scheduler:
         # Penalize saturation heavily
         load_score = (cpu * 1.0) + (ram * 1.0) + (gpu * 1.0) + (active * 5.0)
         
+        # Adjust for IO Heavy jobs
+        if job and job.request.job_type == "io_heavy":
+            # For IO heavy, concurrency is the enemy. Penalize active jobs massively.
+            load_score = (cpu * 0.5) + (ram * 0.5) + (active * 20.0)
+
         # 2. Worker Class Penalties (Soft constraints)
         class_penalty = 0.0
         w_class = getattr(worker, "worker_class", "cpu")
         
         if job:
-            if job.request.requires_gpu:
-                # If job needs GPU, prefer GPU workers (obviously), heavily penalize others
-                # (Hard filter already handles this, but good for completeness)
+            j_type = job.request.job_type
+            
+            if j_type == "gpu_train":
+                # stricter than soft-penalty, this shouldn't happen if filtering is correct
+                # but adding for safety
                 if w_class != "gpu":
-                    class_penalty += 1000.0
-            else:
-                # If job is CPU-only, discourage using GPU workers to save them for GPU jobs
+                     class_penalty += 10000.0
+            
+            elif j_type == "gpu_infer":
+                 # Soft preference for GPU
+                 if w_class != "gpu":
+                     class_penalty += 500.0 # Prefer GPU, but allow CPU if GPU is swamped (score > 500)
+            
+            elif j_type == "compute":
+                # Generic compute: prefer CPU workers to save GPUs
                 if w_class == "gpu":
-                    class_penalty += 200.0
-                # Prefer 'light' or 'cpu' workers for standard jobs (neutral)
+                    class_penalty += 50.0 
         
         return load_score + class_penalty
 
@@ -74,8 +86,9 @@ class Scheduler:
                     if w.is_active and w.has_capacity
                 ]
                 
-                # Filter for GPU if required (Hard Constraint)
-                if job.request.requires_gpu:
+                # 1. Hard Constraints Filtering
+                if job.request.requires_gpu or job.request.job_type == "gpu_train":
+                     # "gpu_train" -> GPU workers only
                      candidates = [w for w in candidates if "gpu" in w.capabilities]
                 
                 if candidates:
@@ -85,7 +98,7 @@ class Scheduler:
                     
                     # Log selected worker and weight
                     weight = self._calculate_weight(best_worker, job)
-                    logger.debug(f"Selected {best_worker.url} (Weight: {weight:.2f})")
+                    logger.debug(f"Selected {best_worker.url} for {job.request.job_type} (Weight: {weight:.2f})")
                     
                     best_worker.active_jobs += 1
                     

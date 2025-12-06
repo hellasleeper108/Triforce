@@ -6,6 +6,7 @@ class JobSubmission(BaseModel):
     entrypoint: str = "main"
     args: List[Any] = []
     requires_gpu: bool = False
+    job_type: str = "compute" # compute, gpu_train, gpu_infer, io_heavy
 
 class JobRequest(BaseModel):
     id: str
@@ -14,6 +15,7 @@ class JobRequest(BaseModel):
     args: List[Any]
     retries: int = 0
     requires_gpu: bool = False
+    job_type: str = "compute"
 
 class JobResponse(BaseModel):
     job_id: str
