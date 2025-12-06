@@ -30,9 +30,19 @@ def register_worker(data: RegistrationData):
 async def get_nodes():
     return cluster.get_snapshot()
 
+@router.get("/cluster/state")
+async def get_cluster_state():
+    return {
+        "timestamp": time.time(),
+        "worker_count": len(cluster.workers),
+        "topology": cluster.get_snapshot()
+    }
+
 @router.get("/dashboard", response_class=HTMLResponse)
 async def dashboard(request: Request):
     workers = cluster.get_snapshot()
+    # Sort: Active first, then by name
+    workers.sort(key=lambda w: (w.status != "ACTIVE", w.specs.get("worker_name", "")))
     active_count = sum(1 for w in workers if w.status == "ACTIVE")
     total_jobs = sum(w.active_jobs for w in workers)
     scores = {w.url: cluster._calculate_score(w) for w in workers}

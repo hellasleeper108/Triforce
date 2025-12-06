@@ -22,6 +22,7 @@ class RegistrationData(BaseModel):
     gpu_mem_total: int
     capabilities: List[str] = []
     gpus: List[Dict[str, Any]] = []
+    worker_class: Optional[str] = None # Optional override by worker
 
 @dataclass
 class Worker:
@@ -34,6 +35,7 @@ class Worker:
     capabilities: List[str] = field(default_factory=list)
     gpus: List[Dict[str, Any]] = field(default_factory=list)
     specs: Dict[str, Any] = field(default_factory=dict)
+    worker_class: str = "cpu"
 
     @property
     def is_active(self):
@@ -61,6 +63,16 @@ class ClusterManager:
             "port": data.port
         }
         
+        # Infer worker class if not provided
+        w_class = data.worker_class
+        if not w_class:
+            if data.gpu_available:
+                w_class = "gpu"
+            elif data.cpu_cores < 4:
+                w_class = "light"
+            else:
+                w_class = "cpu"
+        
         if data.url not in self.workers:
             self.workers[data.url] = Worker(
                 url=data.url, 
@@ -69,7 +81,8 @@ class ClusterManager:
                 last_seen=time.time(),
                 capabilities=data.capabilities,
                 gpus=data.gpus,
-                specs=specs
+                specs=specs,
+                worker_class=w_class
             )
         else:
             w = self.workers[data.url]
@@ -79,6 +92,7 @@ class ClusterManager:
             w.capabilities = data.capabilities
             w.gpus = data.gpus
             w.specs = specs
+            w.worker_class = w_class
 
     def get_snapshot(self) -> List[Worker]:
         return list(self.workers.values())
@@ -137,6 +151,17 @@ class ClusterManager:
                 await asyncio.gather(*tasks)
             
             await asyncio.sleep(5)
+
+            # Prune dead workers (Offline > 5 mins)
+            prune_threshold = now - 300
+            dead_urls = [
+                w.url for w in self.workers.values() 
+                if w.status == "OFFLINE" and w.last_seen < prune_threshold
+            ]
+            for url in dead_urls:
+                logger.info(f"Pruning dead worker: {url}")
+                del self.workers[url]
+
 
     async def _poll_metrics(self, worker: Worker):
         try:
