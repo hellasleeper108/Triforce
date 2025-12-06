@@ -1,0 +1,39 @@
+version: '3.8'
+
+services:
+  odin:
+    build:
+      context: .
+      dockerfile: triforce/odin/Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      - PORT=8080
+      - API_TOKEN=${API_TOKEN}
+      - HOSTNAME=odin-master
+
+  thor-1:
+    build:
+      context: .
+      dockerfile: triforce/thor/Dockerfile
+    depends_on:
+      - odin
+    environment:
+      - ODIN_URL=http://odin:8080
+      - HOST_IP=thor-1
+      - PORT=8000
+      - API_TOKEN=${API_TOKEN}
+      - HOSTNAME=thor-1
+
+  thor-2:
+    build:
+      context: .
+      dockerfile: triforce/thor/Dockerfile
+    depends_on:
+      - odin
+    environment:
+      - ODIN_URL=http://odin:8080
+      - HOST_IP=thor-2
+      - PORT=8000
+      - API_TOKEN=${API_TOKEN}
+      - HOSTNAME=thor-2

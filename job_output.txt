@@ -1,0 +1,9 @@
+Submitting job from TestSleep.py...
+{
+    'job_id': 'd3fce04a-4dca-43ac-834b-6c2629a7aac2',
+    'status': 'FAILED',
+    'result': None,
+    'worker': 'http://localhost:8000',
+    'error': 'Max retries exceeded. Last error: All connection attempts failed'
+}
+Failed! Error: Max retries exceeded. Last error: All connection attempts failed

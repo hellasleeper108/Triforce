@@ -1,0 +1,67 @@
+syntax = "proto3";
+
+package cluster;
+
+option go_package = "github.com/hella/stan-cluster/proto";
+
+// The master service (ODIN)
+service System {
+  // Worker calls this to register itself
+  rpc RegisterWorker (RegisterRequest) returns (RegisterResponse);
+  
+  // Worker calls this to send a heartbeat
+  rpc Heartbeat (HeartbeatRequest) returns (HeartbeatResponse);
+  
+  // Worker calls this to get work or wait for work
+  rpc GetJob (GetJobRequest) returns (stream Job);
+
+  // Worker calls this to update job status/stream logs
+  rpc UpdateJobStatus (JobUpdate) returns (JobUpdateResponse);
+}
+
+message RegisterRequest {
+  string hostname = 1;
+  int32 cpu_cores = 2;
+  int64 ram_mb = 3;
+  repeated string tags = 4;
+  string port = 5;
+}
+
+message RegisterResponse {
+  string worker_id = 1;
+  bool success = 2;
+}
+
+message HeartbeatRequest {
+  string worker_id = 1;
+  int32 running_jobs = 2;
+  int64 memory_usage = 3;
+}
+
+message HeartbeatResponse {
+  bool acknowledge = 1;
+}
+
+message GetJobRequest {
+  string worker_id = 1;
+}
+
+message Job {
+  string job_id = 1;
+  string binary_url = 2; // For simple workloads
+  repeated string args = 3;
+  string docker_image = 4; // For container workloads
+}
+
+message JobUpdate {
+  string job_id = 1;
+  string worker_id = 2;
+  string status = 3; // RUNNING, COMPLETED, FAILED
+  int32 exit_code = 4;
+  string stdout = 5;
+  string stderr = 6;
+}
+
+message JobUpdateResponse {
+  bool acknowledge = 1;
+}
