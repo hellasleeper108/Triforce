@@ -215,12 +215,110 @@
         }
 
         .gpu-active {
-            color: #a855f7;
-            /* Purple for GPU */
-            border-color: #a855f7;
-        }
     </style>
-    <meta http-equiv="refresh" content="5">
+    <!-- SSE Real-time Updates -->
+    <script>
+        const evtSource = new EventSource("/events");
+
+        evtSource.onmessage = function (event) {
+            const data = JSON.parse(event.data);
+
+            // Update Stats
+            document.getElementById("active-workers").textContent = data.active_workers;
+            document.getElementById("active-jobs").textContent = data.total_active_jobs;
+            document.getElementById("queue-size").textContent = data.queue_size;
+
+            // Update Worker Table
+            const tbody = document.getElementById("worker-table-body");
+            tbody.innerHTML = ""; // Clear existing
+
+            data.workers.forEach(w => {
+                const tr = document.createElement("tr");
+
+                // Specs & Class
+                const isGpu = w.specs.gpu_available;
+                const classBadge = isGpu ? '<div class="worker-class-badge gpu-active">CLASS: GPU</div>' : '<div class="worker-class-badge">CLASS: STANDARD</div>';
+                const gpuMem = isGpu ? `<div style="color: #d8b4fe">VRAM: ${w.specs.gpu_mem_total} MB</div>` : '';
+
+                // Metrics
+                const cpu = w.metrics.cpu || 0;
+                const ram = w.metrics.ram || 0;
+                const gpu = w.metrics.gpu || 0;
+                const gpuTemp = w.metrics.gpu_temp || 0;
+
+                // Status Badge
+                const statusClass = w.status.toLowerCase();
+
+                tr.innerHTML = `
+                    <td>
+                        <div style="font-weight: bold; font-size: 16px;">${w.specs.worker_name || w.node_id.substring(0, 8)}</div>
+                        <div style="color: #4b5563; font-size: 11px;">${w.url}</div>
+                        ${classBadge}
+                    </td>
+                    <td><span class="status-badge status-${statusClass}">${w.status}</span></td>
+                    <td style="font-size: 12px; color: #9ca3af;">
+                        <div>CORES: ${w.specs.cpu_cores || '?'}</div>
+                        ${gpuMem}
+                    </td>
+                    <td>
+                        <div style="display: flex; align-items: center; gap: 8px;">
+                            <div class="progress-bar"><div class="progress-fill" style="width: ${cpu}%"></div></div>
+                            ${cpu}%
+                        </div>
+                    </td>
+                    <td>
+                        <div style="display: flex; align-items: center; gap: 8px;">
+                            <div class="progress-bar"><div class="progress-fill" style="width: ${ram}%"></div></div>
+                            ${ram}%
+                        </div>
+                    </td>
+                    <td>
+                        ${isGpu ? `
+                        <div style="display: flex; align-items: center; gap: 8px;">
+                            <div class="progress-bar" style="border-color: #581c87;">
+                                <div class="progress-fill" style="background: #a855f7; width: ${gpu}%"></div>
+                            </div>
+                            ${gpu}%
+                        </div>
+                        <div style="font-size: 10px; margin-top: 2px; color: #a855f7;">TEMP: ${gpuTemp}°C</div>
+                        ` : '<span style="color: #374151;">--</span>'}
+                    </td>
+                    <td>${w.active_jobs}</td>
+                    <td style="color: var(--warning);">${(w.score || 0).toFixed(2)}</td>
+                `;
+                tbody.appendChild(tr);
+            });
+
+            // Update Logs
+            const logContainer = document.getElementById("log-console");
+            logContainer.innerHTML = ""; // Clear and rebuild (or append if smarter) 
+            // Rebuilding is safer for sync, though heavier. For 50 logs it's fine.
+
+            // Logs come oldest first usually, Dashboard reverses them? 
+            // The API sends tail 50. Let's reverse them for display (Newest top)
+            const logs = data.logs.slice().reverse();
+
+            logs.forEach(log => {
+                const div = document.createElement("div");
+                div.className = "log-entry";
+
+                let roleHtml = "";
+                if (log.role) roleHtml = `<span style="color: #06b6d4;">&lt;${log.role}&gt;</span>`;
+
+                let errorHtml = "";
+                if (log.error) errorHtml = `<div style="color: var(--danger); margin-left: 20px;">>> ERROR: ${log.error}</div>`;
+
+                div.innerHTML = `
+                    <span class="log-time">[${log.timestamp.split('T')[1].substring(0, 12)}]</span>
+                    <span class="log-level log-level-${log.level}">${log.level}</span>
+                    <span class="log-msg">
+                        ${roleHtml} ${log.message} ${errorHtml}
+                    </span>
+                `;
+                logContainer.appendChild(div);
+            });
+        };
+    </script>
 </head>
 
 <body>
@@ -238,15 +336,15 @@
 
         <div class="stats-grid">
             <div class="stat-card">
-                <div class="stat-value">{{ active_workers }}</div>
+                <div class="stat-value" id="active-workers">{{ active_workers }}</div>
                 <div class="stat-label">Active Nodes</div>
             </div>
             <div class="stat-card">
-                <div class="stat-value">{{ total_active_jobs }}</div>
+                <div class="stat-value" id="active-jobs">{{ total_active_jobs }}</div>
                 <div class="stat-label">Load Level</div>
             </div>
             <div class="stat-card">
-                <div class="stat-value">{{ queue_size }}</div>
+                <div class="stat-value" id="queue-size">{{ queue_size }}</div>
                 <div class="stat-label">Pending Operations</div>
             </div>
         </div>
@@ -265,7 +363,7 @@
                     <th>Priority</th>
                 </tr>
             </thead>
-            <tbody>
+            <tbody id="worker-table-body">
                 {% for w in workers %}
                 <tr>
                     <td>
@@ -327,7 +425,7 @@
         </table>
 
         <h2 class="section-title">System Event Log</h2>
-        <div class="log-console">
+        <div class="log-console" id="log-console">
             {% for log in logs|reverse %}
             <div class="log-entry">
                 <span class="log-time">[{{ log.timestamp.split('T')[1][:12] }}]</span>

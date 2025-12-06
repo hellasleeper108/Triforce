@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException, Depends, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 import uuid
 import asyncio
@@ -37,6 +37,49 @@ async def get_cluster_state():
         "worker_count": len(cluster.workers),
         "topology": cluster.get_snapshot()
     }
+
+async def event_generator(request: Request):
+    while True:
+        if await request.is_disconnected():
+            break
+            
+        workers = cluster.get_snapshot()
+        # Sort: Active first, then by name
+        workers.sort(key=lambda w: (w.status != "ACTIVE", w.specs.get("worker_name", "")))
+        
+        scores = {w.url: cluster._calculate_score(w) for w in workers}
+        
+        # Serialize workers to dicts because dataclasses aren't automatically JSON serializable in json.dumps
+        # We need a custom encoder or helper. But wait, get_snapshot returns Worker objects.
+        # Worker objects are dataclasses.
+        
+        worker_data = []
+        for w in workers:
+            worker_data.append({
+                "url": w.url,
+                "node_id": w.node_id,
+                "status": w.status,
+                "specs": w.specs,
+                "metrics": w.metrics,
+                "active_jobs": w.active_jobs,
+                "score": scores.get(w.url, 0)
+            })
+            
+        data = {
+            "timestamp": time.time(),
+            "active_workers": sum(1 for w in workers if w.status == "ACTIVE"),
+            "total_active_jobs": sum(w.active_jobs for w in workers),
+            "queue_size": scheduler.queue.qsize(),
+            "workers": worker_data,
+            "logs": list(log_buffer.formatted_buffer)[-50:] # Tail 50
+        }
+        
+        yield f"data: {json.dumps(data)}\n\n"
+        await asyncio.sleep(2)
+
+@router.get("/events")
+async def sse_endpoint(request: Request):
+    return StreamingResponse(event_generator(request), media_type="text/event-stream")
 
 @router.get("/dashboard", response_class=HTMLResponse)
 async def dashboard(request: Request):
