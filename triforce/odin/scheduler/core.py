@@ -34,19 +34,33 @@ class Scheduler:
         await self.queue.put(job)
         logger.info(f"Job {job.request.id} queued. (Queue Size: {self.queue.qsize()})")
 
-    def _calculate_weight(self, worker) -> float:
-        # User defined formula:
-        # weight = (cpu_usage * 0.4) + (ram_usage * 0.2) + (gpu_usage * 0.2) + (active_jobs * 0.2)
-        
+    def _calculate_weight(self, worker, job: InternalJob = None) -> float:
+        # 1. Base Load Score (Lower is better)
         cpu = worker.metrics.get("cpu", 0.0)
         ram = worker.metrics.get("ram", 0.0)
         gpu = worker.metrics.get("gpu", 0.0)
-        
-        # Use real-time active_jobs from worker state, not stale metrics
         active = worker.active_jobs
         
-        weight = (cpu * 0.4) + (ram * 0.2) + (gpu * 0.2) + (active * 0.2)
-        return weight
+        # Penalize saturation heavily
+        load_score = (cpu * 1.0) + (ram * 1.0) + (gpu * 1.0) + (active * 5.0)
+        
+        # 2. Worker Class Penalties (Soft constraints)
+        class_penalty = 0.0
+        w_class = getattr(worker, "worker_class", "cpu")
+        
+        if job:
+            if job.request.requires_gpu:
+                # If job needs GPU, prefer GPU workers (obviously), heavily penalize others
+                # (Hard filter already handles this, but good for completeness)
+                if w_class != "gpu":
+                    class_penalty += 1000.0
+            else:
+                # If job is CPU-only, discourage using GPU workers to save them for GPU jobs
+                if w_class == "gpu":
+                    class_penalty += 200.0
+                # Prefer 'light' or 'cpu' workers for standard jobs (neutral)
+        
+        return load_score + class_penalty
 
     async def run(self):
         logger.info("Scheduler started.")
@@ -60,16 +74,17 @@ class Scheduler:
                     if w.is_active and w.has_capacity
                 ]
                 
-                # Filter for GPU if required
+                # Filter for GPU if required (Hard Constraint)
                 if job.request.requires_gpu:
                      candidates = [w for w in candidates if "gpu" in w.capabilities]
                 
                 if candidates:
-                    candidates.sort(key=self._calculate_weight)
+                    # Sort by weighted score (Lower is better)
+                    candidates.sort(key=lambda w: self._calculate_weight(w, job))
                     best_worker = candidates[0]
                     
                     # Log selected worker and weight
-                    weight = self._calculate_weight(best_worker)
+                    weight = self._calculate_weight(best_worker, job)
                     logger.debug(f"Selected {best_worker.url} (Weight: {weight:.2f})")
                     
                     best_worker.active_jobs += 1
