@@ -16,6 +16,8 @@ class JobRequest(BaseModel):
     retries: int = 0
     requires_gpu: bool = False
     job_type: str = "compute"
+    payload_path: Optional[str] = None
+    result_path: Optional[str] = None
 
 class JobResponse(BaseModel):
     job_id: str
@@ -23,3 +25,5 @@ class JobResponse(BaseModel):
     result: Any = None
     worker: str
     error: Optional[str] = None
+    routing_info: Optional[str] = None
+    result_path: Optional[str] = None

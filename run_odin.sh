@@ -9,6 +9,13 @@ if [ -d "venv" ]; then
     source venv/bin/activate
 fi
 
+# Load .env if present
+if [ -f ".env" ]; then
+    set -a
+    source .env
+    set +a
+fi
+
 # Set default token if not provided
 export API_TOKEN="${API_TOKEN:-supersecret}"
 export PYTHONPATH=$PYTHONPATH:.

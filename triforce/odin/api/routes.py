@@ -17,9 +17,12 @@ import httpx
 router = APIRouter()
 templates = Jinja2Templates(directory="triforce/dashboard/templates")
 
+from triforce.common.storage.client import StorageClient
+
 # Globals (Injected from main)
 cluster = None
 scheduler = None
+storage = None # Will be injected
 
 @router.post("/register")
 def register_worker(data: RegistrationData):
@@ -75,7 +78,7 @@ async def event_generator(request: Request):
         }
         
         yield f"data: {json.dumps(data)}\n\n"
-        await asyncio.sleep(2)
+        await asyncio.sleep(0.5)
 
 @router.get("/events")
 async def sse_endpoint(request: Request):
@@ -129,14 +132,30 @@ async def get_job_status(job_id: str):
 async def submit_job(submission: JobSubmission):
     job_id = str(uuid.uuid4())
     logger.info(f"Received job submission {job_id}")
+
+    # Upload Payload to MinIO
+    payload = {
+        "code": submission.code,
+        "entrypoint": submission.entrypoint,
+        "args": submission.args
+    }
+    payload_path = f"jobs/{job_id}/payload.json"
+    try:
+        if storage:
+            storage.upload_bytes(json.dumps(payload).encode("utf-8"), payload_path)
+    except Exception as e:
+        logger.error(f"Failed to upload payload for {job_id}: {e}")
+        raise HTTPException(status_code=500, detail="Storage upload failed")
     
     future = asyncio.get_event_loop().create_future()
     request = JobRequest(
         id=job_id,
-        code=submission.code,
+        code="", # Clear code from request to save bandwidth if payload_path is used
         entrypoint=submission.entrypoint,
-        args=submission.args,
-        requires_gpu=submission.requires_gpu
+        args=[], # Clear args from request
+        requires_gpu=submission.requires_gpu,
+        job_type=submission.job_type,
+        payload_path=payload_path
     )
     
     internal_job = InternalJob(request=request, future=future)
@@ -149,7 +168,8 @@ async def submit_job(submission: JobSubmission):
             status="COMPLETED" if not result_data.get("error") else "FAILED",
             result=result_data.get("result"),
             worker=result_data.get("worker", "unknown"),
-            error=result_data.get("error")
+            error=result_data.get("error"),
+            routing_info=result_data.get("routing_info")
         )
     except Exception as e:
         response = JobResponse(

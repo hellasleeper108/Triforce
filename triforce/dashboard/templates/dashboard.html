@@ -218,7 +218,9 @@
     </style>
     <!-- SSE Real-time Updates -->
     <script>
-        const evtSource = new EventSource("/events");
+        const urlParams = new URLSearchParams(window.location.search);
+        const token = urlParams.get('token');
+        const evtSource = new EventSource(`/events?token=${token}`);
 
         evtSource.onmessage = function (event) {
             const data = JSON.parse(event.data);

@@ -13,6 +13,9 @@ from triforce.thor.sandbox.executor import execute_python_code
 from triforce.thor.worker.core import heartbeat_loop
 from triforce.common.models.jobs import JobRequest
 from triforce.thor.sandbox.executor import JobResult
+from triforce.common.storage.client import StorageClient
+
+storage = None
 
 NODE_ID = str(uuid.uuid4())
 START_TIME = time.time()
@@ -42,6 +45,15 @@ async def startup_event():
     
     # Init GPU
     init_gpu()
+    
+    # Init Storage
+    global storage
+    try:
+        storage = StorageClient()
+        logger.info("StorageClient initialized")
+    except Exception as e:
+        logger.error(f"Failed to init storage: {e}")
+        
     logger.info(f"THOR Online: {NODE_ID}", extra={"event": "startup", "role": "worker"})
 
 @app.get("/metrics")
@@ -68,7 +80,7 @@ async def submit_work(job: JobRequest):
     
     try:
         loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(None, execute_python_code, job)
+        result = await loop.run_in_executor(None, execute_python_code, job, storage)
         return result
     finally:
         with active_jobs_lock:

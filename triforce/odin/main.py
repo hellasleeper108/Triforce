@@ -8,7 +8,9 @@ from typing import Optional
 from triforce.odin.controllers.worker import ClusterManager
 from triforce.odin.scheduler.core import Scheduler
 from triforce.odin.api import routes
+from triforce.odin.api import routes
 from triforce.odin.utils.logger import logger
+from triforce.common.storage.client import StorageClient
 
 PORT = int(os.getenv("PORT", 8080))
 API_TOKEN = os.getenv("API_TOKEN", "default-insecure-token")
@@ -41,7 +43,9 @@ scheduler = Scheduler(cluster)
 
 # Inject dependencies into router (Naive injection, or better using Depends)
 routes.cluster = cluster
+routes.cluster = cluster
 routes.scheduler = scheduler
+routes.storage = StorageClient() # MinIO connection
 
 app.include_router(routes.router)
 
