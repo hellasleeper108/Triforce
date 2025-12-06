@@ -4,31 +4,31 @@ services:
   odin:
     build:
       context: .
-      dockerfile: triforce/odin/Dockerfile
+      dockerfile: Dockerfile.odin
     ports:
       - "8080:8080"
     environment:
       - PORT=8080
-      - API_TOKEN=${API_TOKEN}
+      - API_TOKEN=${API_TOKEN:-supersecret}
       - HOSTNAME=odin-master
 
   thor-1:
     build:
       context: .
-      dockerfile: triforce/thor/Dockerfile
+      dockerfile: Dockerfile.thor
     depends_on:
       - odin
     environment:
       - ODIN_URL=http://odin:8080
       - HOST_IP=thor-1
       - PORT=8000
-      - API_TOKEN=${API_TOKEN}
+      - API_TOKEN=${API_TOKEN:-supersecret}
       - HOSTNAME=thor-1
 
   thor-2:
     build:
       context: .
-      dockerfile: triforce/thor/Dockerfile
+      dockerfile: Dockerfile.thor
     depends_on:
       - odin
     environment:
