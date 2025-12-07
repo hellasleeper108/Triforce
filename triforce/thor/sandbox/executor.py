@@ -9,7 +9,7 @@ from triforce.thor.utils.logger import logger
 from triforce.common.models.jobs import JobRequest
 
 import json
-from triforce.common.models.jobs import JobResult as BaseJobResult 
+# from triforce.common.models.jobs import JobResult as BaseJobResult 
 # Note: Changing return type to use common JobResult or update local definition?
 # The local JobResult is Pydantic.
 # Let's align with what main expects. main expects JobResult.
@@ -61,6 +61,11 @@ def execute_python_code(job: JobRequest, storage=None) -> JobResult:
         "__builtins__": __builtins__,
     }
 
+    import os # Ensure os is available
+    original_env = os.environ.copy()
+    if job.env:
+        os.environ.update(job.env)
+
     status = "COMPLETED"
     result = None
     
@@ -85,6 +90,8 @@ def execute_python_code(job: JobRequest, storage=None) -> JobResult:
     finally:
         sys.stdout = original_stdout
         sys.stderr = original_stderr
+        os.environ.clear()
+        os.environ.update(original_env)
 
     duration = (time.time() - start_time) * 1000
     

@@ -38,6 +38,16 @@ class JobStore:
                     updated_at REAL
                 )
             """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS workflows (
+                    workflow_id TEXT PRIMARY KEY,
+                    status TEXT NOT NULL,
+                    definition JSON,
+                    state JSON,
+                    created_at REAL,
+                    updated_at REAL
+                )
+            """)
             conn.commit()
             logger.info(f"JobStore initialized at {self.db_path}")
 
@@ -101,3 +111,36 @@ class JobStore:
                 WHERE job_id = ?
             """, (now, job_id))
             conn.commit()
+
+    # --- Workflow Methods ---
+
+    def add_workflow(self, workflow_id: str, definition_json: str, initial_state_json: str):
+        with self._get_conn() as conn:
+            now = time.time()
+            conn.execute("""
+                INSERT INTO workflows (workflow_id, status, definition, state, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (workflow_id, "RUNNING", definition_json, initial_state_json, now, now))
+            conn.commit()
+
+    def update_workflow_state(self, workflow_id: str, status: str, state_json: str):
+        with self._get_conn() as conn:
+            now = time.time()
+            conn.execute("""
+                UPDATE workflows 
+                SET status = ?, state = ?, updated_at = ?
+                WHERE workflow_id = ?
+            """, (status, state_json, now, workflow_id))
+            conn.commit()
+
+    def get_workflow(self, workflow_id: str) -> Optional[Dict[str, Any]]:
+        with self._get_conn() as conn:
+            row = conn.execute("SELECT * FROM workflows WHERE workflow_id = ?", (workflow_id,)).fetchone()
+            if row:
+                return dict(row)
+            return None
+
+    def get_active_workflows(self) -> List[Dict[str, Any]]:
+        with self._get_conn() as conn:
+            rows = conn.execute("SELECT * FROM workflows WHERE status = 'RUNNING'").fetchall()
+            return [dict(row) for row in rows]

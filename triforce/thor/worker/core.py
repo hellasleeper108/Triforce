@@ -18,7 +18,9 @@ class RegistrationData(BaseModel):
     port: int
     gpu_available: bool
     cpu_cores: int
-    gpu_mem_total: int
+    worker_class: str = None
+    memory_gb: float
+    gpu_mem_total: int = 0
     capabilities: List[str] = []
     gpus: List[Dict[str, Any]] = []
 
@@ -34,6 +36,7 @@ def heartbeat_loop(node_id, port, api_token):
     while True:
         try:
             gpus, has_gpu, total_vram = get_gpu_specs()
+            mem_gb = psutil.virtual_memory().total / (1024 ** 3)
             
             payload = RegistrationData(
                 node_id=node_id,
@@ -44,6 +47,7 @@ def heartbeat_loop(node_id, port, api_token):
                 gpu_available=has_gpu,
                 cpu_cores=psutil.cpu_count(logical=True),
                 gpu_mem_total=total_vram,
+                memory_gb=mem_gb,
                 capabilities=["python", "gpu" if has_gpu else "cpu"],
                 gpus=gpus
             )
@@ -54,7 +58,8 @@ def heartbeat_loop(node_id, port, api_token):
             }
             
             requests.post(f"{odin_url}/register", json=payload.model_dump(), headers=headers, timeout=2)
+            # logger.debug(f"Heartbeat sent for {hostname}")
         except Exception as e:
             logger.warning(f"Heartbeat failed: {e}")
             
-        time.sleep(10)
+        time.sleep(5)

@@ -19,10 +19,13 @@ templates = Jinja2Templates(directory="triforce/dashboard/templates")
 
 from triforce.common.storage.client import StorageClient
 
+from typing import Dict, Any
+
 # Globals (Injected from main)
 cluster = None
 scheduler = None
 storage = None # Will be injected
+workflow_manager = None
 
 @router.post("/register")
 def register_worker(data: RegistrationData):
@@ -140,9 +143,17 @@ async def submit_job(submission: JobSubmission):
         "args": submission.args
     }
     payload_path = f"jobs/{job_id}/payload.json"
+    
+    # Run blocking I/O in executor to avoid freezing the loop
     try:
         if storage:
-            storage.upload_bytes(json.dumps(payload).encode("utf-8"), payload_path)
+            logger.info(f"Uploading payload to {payload_path}")
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(
+                None, 
+                lambda: storage.upload_bytes(json.dumps(payload).encode("utf-8"), payload_path)
+            )
+            logger.info(f"Upload complete: {payload_path}")
     except Exception as e:
         logger.error(f"Failed to upload payload for {job_id}: {e}")
         raise HTTPException(status_code=500, detail="Storage upload failed")
@@ -199,3 +210,52 @@ async def get_worker_logs(node_id: str, limit: int = 100):
         if resp.status_code != 200:
             raise HTTPException(status_code=resp.status_code, detail="Failed to fetch logs")
         return resp.json()
+        return resp.json()
+
+# --- Workflow Endpoints ---
+from triforce.common.models.workflows import WorkflowRequest, WorkflowResponse
+
+@router.post("/workflows", response_model=Dict[str, Any])
+async def submit_workflow(request: WorkflowRequest):
+    if not workflow_manager:
+        raise HTTPException(status_code=503, detail="Workflow Manager not initialized")
+        
+    try:
+        wf_id = await workflow_manager.submit_workflow(request)
+        return {"workflow_id": wf_id, "status": "submitted"}
+    except Exception as e:
+        logger.exception(f"Failed to submit workflow")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/workflows/{workflow_id}", response_model=WorkflowResponse)
+async def get_workflow_status(workflow_id: str):
+    if not workflow_manager:
+        raise HTTPException(status_code=503, detail="Workflow Manager not initialized")
+        
+    wf_state = workflow_manager.active_workflows.get(workflow_id)
+    
+    # If not in memory, check DB (if we implemented full historical loading, which we partially did in _recover)
+    if not wf_state:
+        # Fallback to DB check
+        row = workflow_manager.store.get_workflow(workflow_id)
+        if row:
+             state_dict = json.loads(row["state"])
+             # Return state as response
+             # Need to map WorkflowState to WorkflowResponse
+             step_statuses = {sid: s["status"] for sid, s in state_dict["step_states"].items()}
+             return WorkflowResponse(
+                 workflow_id=workflow_id,
+                 status=row["status"],
+                 step_statuses=step_statuses,
+                 created_at=row["created_at"]
+             )
+        raise HTTPException(status_code=404, detail="Workflow not found")
+        
+    # Map in-memory state
+    step_statuses = {sid: s["status"] for sid, s in wf_state.step_states.items()}
+    return WorkflowResponse(
+        workflow_id=wf_state.workflow_id,
+        status=wf_state.status,
+        step_statuses=step_statuses,
+        created_at=wf_state.created_at
+    )

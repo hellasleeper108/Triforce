@@ -10,6 +10,15 @@ HEADERS = {"Authorization": f"Bearer {TOKEN}"}
 def run_test():
     print("--- Testing MinIO Integration ---")
     
+    # 0. Connectivity Check
+    print("Checking connectivity...")
+    try:
+        requests.get(f"{ODIN_URL}/cluster/state", timeout=2)
+        print("Connectivity OK")
+    except Exception as e:
+        print(f"Connectivity Fail: {e}")
+        return
+
     # 1. Submit Job
     payload = {
         "code": "def main(x): return x * 2",
@@ -46,15 +55,24 @@ def run_test():
     print(json.dumps(final_resp, indent=2))
     
     # 3. Verify Result
-    if final_resp['status'] == "COMPLETED" and final_resp['result'] == 42:
+    # ODIN returns the worker's JobResult in the 'result' field (nested)
+    worker_result = final_resp.get('result', {})
+    
+    # If final_resp['result'] is a dict containing 'result', use that.
+    # Otherwise assume it's the direct result (backward compat logic in ODIN?)
+    actual_result = worker_result.get('result') if isinstance(worker_result, dict) else worker_result
+    
+    if final_resp['status'] == "COMPLETED" and actual_result == 42:
         print("[PASS] Execution Correct")
     else:
-        print("[FAIL] Execution Incorrect")
+        print(f"[FAIL] Execution Incorrect. Got: {actual_result}")
 
-    # 4. Verify MinIO usage (checking result_path present in response if we added it to response)
-    # Note: JobResponse in models.py has result_path
-    if final_resp.get('result_path'):
-        print(f"[PASS] Result Path Present: {final_resp['result_path']}")
+    # 4. Verify MinIO usage
+    # result_path should be in the worker result
+    result_path = worker_result.get('result_path') if isinstance(worker_result, dict) else final_resp.get('result_path')
+    
+    if result_path:
+        print(f"[PASS] Result Path Present: {result_path}")
     else:
         print("[FAIL] Result Path Missing")
         

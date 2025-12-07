@@ -1,6 +1,8 @@
+
 import asyncio
 import os
 import httpx
+import time
 from dataclasses import dataclass
 
 from triforce.odin.utils.logger import logger
@@ -58,14 +60,15 @@ class Scheduler:
                     logger.error(f"Failed to recover job {job_data.get('job_id')}: {e}")
 
     async def submit(self, job: InternalJob):
-        import time
+        logger.info(f"Scheduling job {job.request.id}")
+        
         job.created_at = time.time()
         job.status = "QUEUED"
         
-        # Persist Initial State
+        # Persist QUEUED state
         self.store.add_job(
-            job.request.id, 
-            job.request.job_type, 
+            job.request.id,
+            job.request.job_type,
             job.request.model_dump()
         )
         

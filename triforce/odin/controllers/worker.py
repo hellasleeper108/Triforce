@@ -20,6 +20,7 @@ class RegistrationData(BaseModel):
     gpu_available: bool
     cpu_cores: int
     gpu_mem_total: int
+    memory_gb: float
     capabilities: List[str] = []
     gpus: List[Dict[str, Any]] = []
     worker_class: Optional[str] = None # Optional override by worker
@@ -57,6 +58,7 @@ class ClusterManager:
         specs = {
             "cpu_cores": data.cpu_cores,
             "gpu_mem_total": data.gpu_mem_total,
+            "memory_gb": data.memory_gb,
             "gpu_available": data.gpu_available,
             "worker_name": data.worker_name,
             "ip": data.ip,
@@ -140,7 +142,7 @@ class ClusterManager:
         while True:
             now = time.time()
             for w in self.workers.values():
-                if now - w.last_seen > 30:
+                if now - w.last_seen > 15:
                     if w.status != "OFFLINE":
                         logger.warning(f"Worker {w.url} timed out")
                         w.status = "OFFLINE"

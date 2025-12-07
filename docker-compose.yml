@@ -1,4 +1,4 @@
-version: '3.8'
+version: "3.8"
 
 services:
   odin:
@@ -26,6 +26,8 @@ services:
       - PORT=8000
       - API_TOKEN=${API_TOKEN:-supersecret}
       - HOSTNAME=thor-1
+    volumes:
+      - .:/app
     deploy:
       resources:
         reservations:
@@ -46,6 +48,8 @@ services:
       - PORT=8000
       - API_TOKEN=${API_TOKEN}
       - HOSTNAME=thor-2
+    volumes:
+      - .:/app
     deploy:
       resources:
         reservations:

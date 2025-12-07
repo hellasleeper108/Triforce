@@ -8,15 +8,16 @@ from typing import Optional
 from triforce.odin.controllers.worker import ClusterManager
 from triforce.odin.scheduler.core import Scheduler
 from triforce.odin.api import routes
-from triforce.odin.api import routes
 from triforce.odin.utils.logger import logger
 from triforce.common.storage.client import StorageClient
+from triforce.odin.workflows.engine import WorkflowManager
 
 PORT = int(os.getenv("PORT", 8080))
 API_TOKEN = os.getenv("API_TOKEN", "default-insecure-token")
 security = HTTPBearer(auto_error=False)
 
 async def verify_token(request: Request, credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)):
+    print(f"DEBUG: Entering verify_token {request.url.path}", flush=True)
     token = None
     
     # 1. Check Bearer Header
@@ -40,12 +41,13 @@ app = FastAPI(title="ODIN Controller (Triforce)", dependencies=[Depends(verify_t
 # Initialize components
 cluster = ClusterManager()
 scheduler = Scheduler(cluster)
+workflow_manager = WorkflowManager(scheduler, scheduler.store)
 
 # Inject dependencies into router (Naive injection, or better using Depends)
 routes.cluster = cluster
-routes.cluster = cluster
 routes.scheduler = scheduler
 routes.storage = StorageClient() # MinIO connection
+routes.workflow_manager = workflow_manager
 
 app.include_router(routes.router)
 

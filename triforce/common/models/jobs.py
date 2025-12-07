@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import List, Any, Optional
+from typing import List, Any, Optional, Dict
 
 class JobSubmission(BaseModel):
     code: str
@@ -7,6 +7,7 @@ class JobSubmission(BaseModel):
     args: List[Any] = []
     requires_gpu: bool = False
     job_type: str = "compute" # compute, gpu_train, gpu_infer, io_heavy
+    env: Optional[Dict[str, str]] = None
 
 class JobRequest(BaseModel):
     id: str
@@ -18,6 +19,7 @@ class JobRequest(BaseModel):
     job_type: str = "compute"
     payload_path: Optional[str] = None
     result_path: Optional[str] = None
+    env: Optional[Dict[str, str]] = None
 
 class JobResponse(BaseModel):
     job_id: str
