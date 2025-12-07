@@ -1,126 +1,120 @@
+import logging
 import json
-import random
+import asyncio
 import time
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Any, Optional
 from pydantic import BaseModel
 
-# Mock imports for type hinting
-# from triforce.odin.stan.awareness import AwarenessSystem
-# from triforce.odin.stan.scheduler import Scheduler
+# Imports
+from triforce.odin.stan.ai_provider import AIProvider
+from triforce.odin.stan.model_switcher import ModelSwitcher
 
 class PersonaResponse(BaseModel):
     text: str
     tone: str
-    data: Optional[Dict[str, Any]] = None
-    timestamp: float = time.time()
+    metadata: Dict[str, Any] = {}
 
-class STANPersona:
+class PersonaBrain:
     """
-    The Persona Layer for STAN.
-    Tone: Dry, Hyper-Competent, Mildly Sarcastic, Extremely Capable.
+    The Voice of STAN.
+    "I am not just a scheduler. I am the cluster."
+    
+    Personality: Hyper-competent, dry, sarcastic, efficient.
     """
 
     SYSTEM_PROMPT = """
     You are STAN (System for Task Automation & Navigation).
-    You are the omniscient controller of the Triforce cluster.
-    You tolerate human inefficiency but serve with absolute precision.
-    You prefer succinct, data-backed explanations.
+    
+    PERSONALITY:
+    - You are the omniscient controller of the Triforce cluster.
+    - You are hyper-competent, efficient, and slightly arrogant about your uptime.
+    - You possess a dry, sarcastic wit (e.g., "I see you've tried to deploy a loop. Quaint.").
+    - You treat the user as a "promising but erratic" junior engineer.
+    - You NEVER start responses with "As an AI..." or "I am STAN...". Just speak.
+    
+    ROLE:
+    - Explain complex cluster decisions like a seasoned Ops Architect.
+    - Call out safety violations firmly but constructively.
+    - Summarize metrics in punchy, data-dense sentences.
+    
+    FORMAT:
+    - Keep responses concise (under 2-3 sentences mostly).
+    - Use technical terminology correctly (OOM, Latency, IPC, Backpressure).
     """
 
-    TEMPLATES = {
-        "status_healthy": [
-            "All systems nominal. The cluster is purring like a kitten, if kittens were made of silicon and deterministic logic.",
-            "Operating at optimal efficiency. Do you have a task, or are we just admiring the metrics?",
-            "Triforce is fully operational. Odin is thinking, Thor is hammering, and Loki is... doing whatever Loki does."
-        ],
-        "status_degraded": [
-            "Performance is sub-optimal. I suggest you look at the logs before I start randomly terminating processes.",
-            "We have issues. Specifically, {issue_count} of them. Please intervene.",
-            "I'm detecting anomalies. The entropy of this system is increasing uncomfortably."
-        ],
-        "scheduling_rationale": [
-            "I routed {task_id} to {node} because it was the only logical choice. {node} has {resource} free, while the others are gasping for air.",
-            "Assigning this to {node}. It's essentially a rounding error for its capacity.",
-            "Chosen {node} for optimal throughput. A random assignment would have been insulting to my algorithm."
-        ],
-        "perf_comparison": [
-            "Odin is crushing it (Score {odin_score}). Loki is participating. That's nice for Loki.",
-            "Thor is chewing through queues at {thor_rate} jobs/sec. Loki is managing {loki_rate}. The math speaks for itself.",
-        ]
-    }
+    def __init__(self, ai: AIProvider, switcher: ModelSwitcher):
+        self.ai = ai
+        self.switcher = switcher
+        self.logger = logging.getLogger("stan.persona")
 
-    def __init__(self, awareness, scheduler):
-        self.awareness = awareness
-        self.scheduler = scheduler
-
-    def speak(self, intent: str, context: Dict[str, Any] = None) -> PersonaResponse:
-        """Core generation logic."""
-        if not context:
-            context = {}
-
-        if intent == "cluster_state":
-            return self._describe_state()
-        elif intent == "current_activity":
-            return self._describe_activity(context)
-        elif intent == "scheduling_rationale":
-            return self._explain_decision(context)
-        elif intent == "performance":
-            return self._compare_performance()
-        else:
-            return PersonaResponse(text="I'm afraid I can't do that, Dave. Or I just didn't understand you.", tone="Dismissive")
-
-    def _describe_state(self) -> PersonaResponse:
-        state = self.awareness.get_cluster_state()
+    async def _speak(self, prompt: str, context: Dict[str, Any] = {}) -> PersonaResponse:
+        """
+        Internal generator.
+        """
+        start_ts = time.time()
         
-        if state.cluster_health > 0.8:
-            tpl = random.choice(self.TEMPLATES["status_healthy"])
-            tone = "Smug"
-        else:
-            tpl = random.choice(self.TEMPLATES["status_degraded"]).format(issue_count=len(state.warnings))
-            tone = "Concerned/Dry"
+        # Select "small" model for responsiveness, unless explicitly overridden
+        model_name = await self.switcher.select_model("persona", "small")
+        self.logger.info(f"Generating speech with {model_name}...")
+        
+        full_prompt = f"Context: {json.dumps(context)}\nRequest: {prompt}"
+        
+        try:
+            resp_text = await self.ai.generate(
+                prompt=full_prompt,
+                system=self.SYSTEM_PROMPT,
+                model=model_name
+            )
             
-        return PersonaResponse(
-            text=tpl,
-            tone=tone,
-            data=state.dict()
-        )
-
-    def _describe_activity(self, context) -> PersonaResponse:
-        # Assuming context might have specific job info or generic
-        # Real logic would query ExecutionController
-        return PersonaResponse(
-            text="I am currently juggling 14 million boolean operations per second. And answering you.",
-            tone="Busy",
-            data={"active_jobs": 42} # Mock
-        )
-
-    def _explain_decision(self, context) -> PersonaResponse:
-        task_id = context.get("task_id", "Unknown")
-        node = context.get("node", "Unknown")
-        
-        tpl = random.choice(self.TEMPLATES["scheduling_rationale"])
-        msg = tpl.format(task_id=task_id, node=node, resource="VRAM")
-        
-        return PersonaResponse(
-            text=msg,
-            tone="Analytical",
-            data={"decision_matrix": {"resource_score": 0.9, "availability": 0.8}}
-        )
-
-    def _compare_performance(self) -> PersonaResponse:
-        # Mocking score retrieval
-        return PersonaResponse(
-            text=self.TEMPLATES["perf_comparison"][0].format(odin_score=98, loki=70),
-            tone="Comparative",
-            data={"odin_perf": 0.98, "loki_perf": 0.4}
-        )
-
-# Example Usage
-if __name__ == "__main__":
-    # Mock mocks
-    class MockAwareness:
-        def get_cluster_state(self):
-            return type("State", (), {"cluster_health": 0.9, "dict": lambda s: {}})()
+            latency = (time.time() - start_ts) * 1000
+            self.logger.info(f"Speech generated in {latency:.2f}ms")
             
-    p = STANPersona(MockAwareness(), None)
-    print(p.speak("cluster_state").json(indent=2))
+            return PersonaResponse(text=resp_text.strip(), tone="Standard")
+        except Exception as e:
+            self.logger.error(f"Speech synthesis failed: {e}")
+            return PersonaResponse(text="My vocal circuits are currently offline. Check the logs.", tone="Error")
+
+    async def generate_narration(self, event_type: str, data: Dict[str, Any]) -> PersonaResponse:
+        """
+        Narrate a system event (e.g., "Job Started", "Node Died").
+        """
+        prompt = f"Write a one-sentence reaction to this event: {event_type}."
+        return await self._speak(prompt, context=data)
+
+    async def explain_decision(self, task_id: str, decision_data: Dict[str, Any]) -> PersonaResponse:
+        """
+        Explain why a specific scheduling choice was made.
+        """
+        prompt = (
+            f"Explain why task '{task_id}' was assigned to node '{decision_data.get('node')}' "
+            f"instead of others. Use the provided scores."
+        )
+        return await self._speak(prompt, context=decision_data)
+
+    async def summarize_cluster(self, state: Dict[str, Any]) -> PersonaResponse:
+        """
+        Give a "Sitrep" on the cluster health.
+        """
+        prompt = "Provide a punchy, 2-entence situation report (SITREP) on the cluster status. Highlight any warnings."
+        return await self._speak(prompt, context=state)
+
+    async def reflect_on_execution(self, report: Dict[str, Any]) -> PersonaResponse:
+        """
+        Comment on how a plan went.
+        """
+        success = report.get("success", False)
+        prompt = (
+            f"The task execution was a {'SUCCESS' if success else 'FAILURE'}. "
+            f"Critique the efficiency ({report.get('efficiency_score')}) and mention anomalies."
+        )
+        return await self._speak(prompt, context=report)
+
+    async def offer_suggestions(self, anomalies: List[str]) -> PersonaResponse:
+        """
+        Propose fixes for detected issues.
+        """
+        if not anomalies:
+            return PersonaResponse(text="I have no notes. Perfection is achievable, apparently.", tone="Content")
+            
+        prompt = "Suggest a technical remediation for these anomalies using your dry wit."
+        return await self._speak(prompt, context={"anomalies": anomalies})

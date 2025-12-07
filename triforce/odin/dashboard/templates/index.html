@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>STAN Cluster HUD</title>
+    <style>
+        :root {
+            --bg-dark: #0f1115;
+            --bg-card: #161b22;
+            --text-primary: #e6edf3;
+            --text-secondary: #8b949e;
+            --accent: #58a6ff;
+            --danger: #f85149;
+            --success: #3fb950;
+            --warning: #d29922;
+            --border: #30363d;
+        }
+
+        body {
+            background-color: var(--bg-dark);
+            color: var(--text-primary);
+            font-family: 'Segoe UI', system-ui, sans-serif;
+            margin: 0;
+            padding: 20px;
+            display: grid;
+            grid-template-rows: auto 1fr auto;
+            height: 100vh;
+            box-sizing: border-box;
+        }
+
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding-bottom: 20px;
+            border-bottom: 1px solid var(--border);
+            margin-bottom: 20px;
+        }
+
+        h1 {
+            margin: 0;
+            font-weight: 300;
+            letter-spacing: 1px;
+        }
+
+        .grid-container {
+            display: grid;
+            grid-template-columns: 2fr 1fr;
+            gap: 20px;
+            height: 100%;
+            overflow: hidden;
+        }
+
+        .left-col {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        .right-col {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        .card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 15px;
+        }
+
+        .card-header {
+            font-weight: bold;
+            margin-bottom: 15px;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            font-size: 0.85em;
+        }
+
+        /* Node Cards */
+        .nodes-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 15px;
+        }
+
+        .node-card {
+            background: #0d1117;
+            padding: 15px;
+            border-radius: 6px;
+            border: 1px solid var(--border);
+        }
+
+        .node-name {
+            font-weight: bold;
+            font-size: 1.1em;
+            color: var(--accent);
+        }
+
+        .node-role {
+            font-size: 0.8em;
+            color: var(--text-secondary);
+        }
+
+        .metric-row {
+            margin-top: 10px;
+            font-size: 0.9em;
+        }
+
+        .metric-label {
+            color: var(--text-secondary);
+        }
+
+        .bar-container {
+            background: #21262d;
+            height: 6px;
+            border-radius: 3px;
+            margin-top: 5px;
+            overflow: hidden;
+        }
+
+        .bar-fill {
+            height: 100%;
+            background: var(--success);
+            transition: width 0.5s ease;
+        }
+
+        .high-load {
+            background: var(--danger);
+        }
+
+        /* Tasks Table */
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.9em;
+        }
+
+        th,
+        td {
+            text-align: left;
+            padding: 8px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        th {
+            color: var(--text-secondary);
+        }
+
+        /* Terminal / Command */
+        .terminal-output {
+            flex-grow: 1;
+            background: #000;
+            padding: 10px;
+            font-family: 'Consolas', monospace;
+            font-size: 0.9em;
+            color: #ccc;
+            overflow-y: auto;
+            border-radius: 4px;
+            white-space: pre-wrap;
+        }
+
+        .input-group {
+            display: flex;
+            gap: 10px;
+            margin-top: 10px;
+        }
+
+        input[type="text"] {
+            flex-grow: 1;
+            background: var(--bg-dark);
+            border: 1px solid var(--border);
+            color: var(--text-primary);
+            padding: 10px;
+            border-radius: 4px;
+        }
+
+        button {
+            background: var(--success);
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+        }
+
+        button:hover {
+            opacity: 0.9;
+        }
+    </style>
+</head>
+
+<body>
+
+    <header>
+        <h1>STAN <span style="color:var(--accent)">Control Deck</span></h1>
+        <div id="status-badge" style="color:var(--success)">● System Online</div>
+    </header>
+
+    <div class="grid-container">
+        <div class="left-col">
+            <!-- Node Status -->
+            <div class="card">
+                <div class="card-header">Cluster Nodes</div>
+                <div class="nodes-grid" id="nodes-container">
+                    <!-- Injected via JS -->
+                </div>
+            </div>
+
+            <!-- Active Tasks -->
+            <div class="card" style="flex-grow: 1;">
+                <div class="card-header">Active Operations</div>
+                <table id="tasks-table">
+                    <thead>
+                        <tr>
+                            <th>Task ID</th>
+                            <th>Node</th>
+                            <th>Status</th>
+                            <th>Elapsed</th>
+                        </tr>
+                    </thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="right-col">
+            <!-- Alerts -->
+            <div class="card" style="height: 30%;">
+                <div class="card-header">System Alerts</div>
+                <div id="alerts-container" style="font-size: 0.9em;"></div>
+            </div>
+
+            <!-- Command Console -->
+            <div class="card" style="flex-grow: 1; display: flex; flex-direction: column;">
+                <div class="card-header">Neural Interface (STAN AI)</div>
+                <div class="terminal-output" id="terminal">
+                    <div style="color:var(--accent)">> Connecting to STAN Supernova... [CONNECTED]</div>
+                    <div>Waiting for instructions...</div>
+                </div>
+                <div class="input-group">
+                    <input type="text" id="cmd-input" placeholder="e.g., 'Check status of Thor' or 'Deploy Llama-3'"
+                        onkeypress="handleEnter(event)">
+                    <button onclick="sendCommand()">SEND</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        async function updateState() {
+            try {
+                const res = await fetch('/api/cluster/state');
+                const data = await res.json();
+
+                // Render Nodes
+                const nodesContainer = document.getElementById('nodes-container');
+                nodesContainer.innerHTML = data.nodes.map(n => {
+                    const cpuColor = n.cpu > 80 ? 'high-load' : '';
+                    const gpuColor = n.gpu > 80 ? 'high-load' : '';
+                    return `
+                <div class="node-card">
+                    <div class="node-name">${n.id}</div>
+                    <div class="node-role">${n.role} • ${n.status}</div>
+                    
+                    <div class="metric-row">
+                        <span class="metric-label">CPU ${n.cpu}%</span>
+                        <div class="bar-container"><div class="bar-fill ${cpuColor}" style="width: ${n.cpu}%"></div></div>
+                    </div>
+                    <div class="metric-row">
+                        <span class="metric-label">RAM ${n.ram}%</span>
+                        <div class="bar-container"><div class="bar-fill" style="width: ${n.ram}%"></div></div>
+                    </div>
+                    <div class="metric-row">
+                        <span class="metric-label">GPU ${n.gpu}%</span>
+                        <div class="bar-container"><div class="bar-fill ${gpuColor}" style="width: ${n.gpu}%"></div></div>
+                    </div>
+                </div>`;
+                }).join('');
+
+                // Render Tasks
+                const tasksTable = document.querySelector('#tasks-table tbody');
+                tasksTable.innerHTML = data.tasks.map(t =>
+                    `<tr><td>${t.id}</td><td>${t.node}</td><td>${t.status}</td><td>${t.elapsed}</td></tr>`
+                ).join('');
+
+                // Render Alerts
+                const alertsContainer = document.getElementById('alerts-container');
+                alertsContainer.innerHTML = data.alerts.filter(a => a).map(a =>
+                    `<div style="margin-bottom:5px; color:${a.level === 'warning' ? '#d29922' : '#e6edf3'}">
+                    • ${a.msg}
+                </div>`
+                ).join('');
+
+            } catch (e) {
+                console.error("Fetch error", e);
+            }
+        }
+
+        async function sendCommand() {
+            const input = document.getElementById('cmd-input');
+            const term = document.getElementById('terminal');
+            const text = input.value;
+            if (!text) return;
+
+            term.innerHTML += `\n<div style="color:var(--text-secondary)">> ${text}</div>`;
+            input.value = '';
+            term.scrollTop = term.scrollHeight;
+
+            try {
+                term.innerHTML += `<div>[Thinking...]</div>`;
+                const res = await fetch('/api/commands', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ text: text })
+                });
+                const data = await res.json();
+
+                // Remove "Thinking" loading text (simple hack)
+                term.innerHTML = term.innerHTML.replace('<div>[Thinking...]</div>', '');
+
+                term.innerHTML += `<div style="color:var(--success)">${data.response}</div>`;
+                term.scrollTop = term.scrollHeight;
+            } catch (e) {
+                term.innerHTML += `<div style="color:var(--danger)">Error: Failed to reach STAN.</div>`;
+            }
+        }
+
+        function handleEnter(e) {
+            if (e.key === 'Enter') sendCommand();
+        }
+
+        // Loop
+        setInterval(updateState, 2000);
+        updateState();
+    </script>
+</body>
+
+</html>

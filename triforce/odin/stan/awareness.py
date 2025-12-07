@@ -2,234 +2,251 @@ import logging
 import time
 import json
 import statistics
+import asyncio
 from typing import Dict, List, Optional, Any
 from pydantic import BaseModel, Field
 
-# Mocking Registry/Manifest access for standalone compiling
-# from triforce.odin.stan.registry import WorkerRegistry, WorkerManifest, WorkerMetrics
+# Imports
+from triforce.odin.stan.ai_provider import AIProvider
+from triforce.odin.stan.memory import MemoryEngine, MemoryType
 
 # --- Data Models ---
 
 class NodeHealth(BaseModel):
     node_id: str
     status: str
-    health_score: float # 0.0 to 1.0 (1.0 = Healthy, 0.0 = Dead)
-    risk_factors: List[str] = []
+    health_score: float # 0.0 - 1.0
+    risk_factors: List[str]
     last_updated: float = Field(default_factory=time.time)
+
+class PredictionReport(BaseModel):
+    node_id: str
+    failure_probability: float # 0.0 - 1.0
+    est_time_to_failure: str # "N/A" or "2h"
+    reasoning: str
+
+class AnomalyExplanation(BaseModel):
+    summary: str
+    root_cause_hypothesis: str
+    remediation_suggestion: str
+    confidence: float
 
 class ClusterState(BaseModel):
     total_nodes: int
     active_nodes: int
-    total_cores: int
-    total_memory_gb: float
-    total_vram_gb: float
-    avg_cpu_load: float
-    avg_gpu_load: float
+    avg_load: float
     cluster_health: float
-    warnings: List[str] = []
+    warnings: List[str]
+    ai_summary: Optional[str] = None
     timestamp: float = Field(default_factory=time.time)
 
-class AnomalyReport(BaseModel):
-    anomalies_detected: int
-    details: List[str]
-    recommendations: List[str]
+# --- Awareness Brain ---
 
-# --- Awareness System ---
-
-class AwarenessSystem:
+class AwarenessBrain:
     """
-    The 'Eye' of STAN. Aggregates telemetry, scores health, and detects anomalies.
+    The 'Eye' of STAN - Enhanced with Cortex.
+    Aggregates telemetry, scores health, and uses AI to explain why things are breaking.
     """
 
-    def __init__(self, registry):
+    SYSTEM_PROMPT = """
+    You are the AWARENESS brain of STAN.
+    Analyze cluster telemetry and memory context.
+    Identify anomalies, predict failures, and suggest resource redistribution.
+    Be concise and technical.
+    """
+
+    def __init__(self, registry, ai_provider: AIProvider, memory: MemoryEngine):
         self.registry = registry
+        self.ai = ai_provider
+        self.memory = memory
         self.logger = logging.getLogger("stan.awareness")
         
-        # In-memory history for predictive analytics (rolling window)
+        # Telemetry Store (Rolling Window)
         self.metric_history: Dict[str, List[dict]] = {} 
         self.max_history_len = 50
 
     def ingest_metrics(self, node_id: str, metrics: dict):
-        """Called whenever a heartbeat arrives."""
         if node_id not in self.metric_history:
             self.metric_history[node_id] = []
         
         entry = {**metrics, "timestamp": time.time()}
         self.metric_history[node_id].append(entry)
         
-        # Prune
         if len(self.metric_history[node_id]) > self.max_history_len:
             self.metric_history[node_id].pop(0)
 
-    # --- State Queries ---
+    # --- Heuristic + AI Hybrid Diagnostics ---
 
-    def get_cluster_state(self) -> ClusterState:
+    async def detect_anomalies(self) -> Dict[str, AnomalyExplanation]:
+        """
+        1. Runs fast heuristics.
+        2. If anomaly found, calls AI to explain 'Why' using RAG.
+        """
+        anomalies = {}
+        
+        # 1. Heuristic Scan
+        for node in self.registry.list_all():
+            if node.status != "ACTIVE": continue
+            
+            issues = []
+            if getattr(node.metrics, "cpu_usage", 0) > 90: issues.append(f"CPU {node.metrics.cpu_usage}%")
+            if getattr(node.metrics, "gpu_temp", 0) > 85: issues.append(f"GPU Temp {node.metrics.gpu_temp}C")
+            
+            # Simple latency check
+            latency = time.time() - node.last_seen
+            if latency > 60: issues.append(f"High Latency {int(latency)}s")
+            
+            if issues:
+                # 2. AI Reasoning
+                anomalies[node.node_id] = await self._explain_anomaly(node, issues)
+        
+        return anomalies
+
+    async def _explain_anomaly(self, node, issues: List[str]) -> AnomalyExplanation:
+        start_ts = time.time()
+        
+        # Fetch Context
+        context_str = await self.memory.get_context_for_reasoning(f"Anomaly on {node.worker_name}: {issues}")
+        
+        prompt = (
+            f"Node: {node.worker_name} ({node.node_id})\n"
+            f"Issues: {issues}\n"
+            f"Specs: {node.specs.__dict__}\n"
+            f"History Context: {context_str}\n\n"
+            "Diagnose the root cause and suggest remediation."
+        )
+        
+        try:
+            self.logger.info(f"Diagnosing {node.worker_name}...")
+            # Generate JSON explanation
+            resp = await self.ai.generate(
+                prompt=prompt,
+                system=self.SYSTEM_PROMPT + " Output JSON: {summary, root_cause, suggestion, confidence}",
+                json_format=True
+            )
+            data = json.loads(resp)
+            latency = (time.time() - start_ts) * 1000
+            self.logger.info(f"Diagnosis complete in {latency:.2f}ms")
+            
+            return AnomalyExplanation(
+                summary=data.get("summary", "Anomaly Detected"),
+                root_cause_hypothesis=data.get("root_cause", "Unknown"),
+                remediation_suggestion=data.get("suggestion", "Check logs"),
+                confidence=data.get("confidence", 0.5)
+            )
+        except Exception as e:
+            self.logger.error(f"AI diag failed: {e}")
+            return AnomalyExplanation(
+                summary=f"Issues: {issues}",
+                root_cause_hypothesis="Heuristic detection only",
+                remediation_suggestion="Manual inspection required",
+                confidence=1.0
+            )
+
+    async def get_predictions(self) -> List[PredictionReport]:
+        """
+        Predicts node failures based on trends.
+        """
+        predictions = []
+        for node_id, history in self.metric_history.items():
+            if len(history) < 10: continue
+            
+            # Simple Trend: Is temp rising?
+            temps = [h.get("gpu_temp", 0) for h in history]
+            if len(temps) > 1 and temps[-1] > 80 and temps[-1] > temps[0]:
+                predictions.append(PredictionReport(
+                    node_id=node_id,
+                    failure_probability=0.8,
+                    est_time_to_failure="<1h",
+                    reasoning="Thermal runaway detected. GPU temp rising consistently."
+                ))
+        
+        return predictions
+
+    async def get_cluster_state(self) -> ClusterState:
         workers = self.registry.list_all()
         active = [w for w in workers if w.status != "OFFLINE"]
         
-        if not workers:
-            return ClusterState(
-                total_nodes=0, active_nodes=0, total_cores=0, total_memory_gb=0,
-                total_vram_gb=0, avg_cpu_load=0, avg_gpu_load=0, cluster_health=0, 
-                warnings=["Cluster is empty"]
-            )
-
-        total_nodes = len(workers)
-        active_nodes = len(active)
-        total_cores = sum(w.specs.cpu_cores for w in active)
-        total_mem = sum(w.specs.memory_gb for w in active)
-        total_vram = sum(w.specs.gpu_mem_total for w in active) / 1024.0 # MB -> GB
+        # Base Metrics
+        total = len(workers)
+        alive = len(active)
+        avg_load = statistics.mean([w.metrics.cpu_usage for w in active]) if active else 0
         
-        # Calculate Averages (avoid Div/0)
-        avg_cpu = sum(w.metrics.cpu_usage for w in active) / active_nodes if active_nodes else 0
-        avg_gpu = sum(w.metrics.gpu_usage for w in active) / active_nodes if active_nodes else 0
+        health_scores = [self.get_node_health(w.node_id).health_score for w in active]
+        cluster_health = statistics.mean(health_scores) if health_scores else 0.0
         
-        # Aggregate Risk
-        node_healths = [self.get_node_health(w.node_id).health_score for w in active]
-        cluster_health = statistics.mean(node_healths) if node_healths else 0.0
-
         warnings = []
-        if active_nodes < total_nodes:
-            warnings.append(f"{total_nodes - active_nodes} nodes are OFFLINE.")
-        if cluster_health < 0.7:
-            warnings.append("Cluster health is DEGRADED.")
-
+        if alive < total: warnings.append(f"{total - alive} nodes OFFLINE")
+        
+        # AI Summary (Optional - expensive, so maybe randomized or cached)
+        ai_summary = None
+        # In full impl, we might run this periodically, not per request
+        
         return ClusterState(
-            total_nodes=total_nodes,
-            active_nodes=active_nodes,
-            total_cores=total_cores,
-            total_memory_gb=total_mem,
-            total_vram_gb=total_vram,
-            avg_cpu_load=avg_cpu,
-            avg_gpu_load=avg_gpu,
+            total_nodes=total,
+            active_nodes=alive,
+            avg_load=avg_load,
             cluster_health=cluster_health,
-            warnings=warnings
+            warnings=warnings,
+            ai_summary="Cluster nominal." # Placeholder for sync call
         )
 
     def get_node_health(self, node_id: str) -> NodeHealth:
-        worker = self.registry.get_worker(node_id)
-        if not worker:
-            return NodeHealth(node_id=node_id, status="UNKNOWN", health_score=0.0)
-
+        # Re-implementing base heuristic logic for speed + consistency
+        w = self.registry.get_worker(node_id)
+        if not w: return NodeHealth(node_id=node_id, status="UNKNOWN", health_score=0, risk_factors=[])
+        
         score = 1.0
         risks = []
-
-        # 1. Liveness
-        if worker.status == "OFFLINE":
-            score = 0.0
-            risks.append("Node offline")
-            return NodeHealth(node_id=node_id, status="OFFLINE", health_score=score, risk_factors=risks)
-
-        # 2. Staleness (missed heartbeats)
-        latency = time.time() - worker.last_seen
-        if latency > 30: # >2 Missed beats
-            score -= 0.3
-            risks.append(f"High Latency ({int(latency)}s)")
         
-        # 3. Resource Saturation
-        if worker.metrics.cpu_usage > 90:
+        if w.status == "OFFLINE":
+             return NodeHealth(node_id=node_id, status="OFFLINE", health_score=0, risk_factors=["Offline"])
+             
+        if getattr(w.metrics, "cpu_usage", 0) > 90:
             score -= 0.2
-            risks.append("CPU Saturated (>90%)")
-        
-        if worker.metrics.ram_usage > 95:
-            score -= 0.3
-            risks.append("RAM Critical (>95%)")
+            risks.append("CPU Saturation")
             
-        if worker.specs.gpu_available:
-            if worker.metrics.gpu_temp > 85:
-                score -= 0.2
-                risks.append(f"GPU Overheating ({worker.metrics.gpu_temp}C)")
-
         return NodeHealth(
             node_id=node_id,
-            status=worker.status,
-            health_score=max(0.0, score),
+            status=w.status,
+            health_score=max(0, score),
             risk_factors=risks
         )
 
-    # --- Analytics ---
+# --- Example Driver ---
 
-    def detect_anomalies(self) -> AnomalyReport:
-        details = []
-        recommendations = []
-        
-        # 1. Check for zombie nodes (Active but silent)
-        for w in self.registry.list_all():
-             latency = time.time() - w.last_seen
-             if w.status != "OFFLINE" and latency > 60:
-                 details.append(f"Node {w.worker_name} marked ACTIVE but silent for {int(latency)}s (Zombie?)")
-                 recommendations.append(f"Restart Thor service on {w.worker_name}")
-        
-        # 2. Check for resource imbalances (Simple deviation)
-        actives = [w for w in self.registry.list_all() if w.status == "ACTIVE"]
-        if len(actives) > 1:
-            loads = [w.metrics.cpu_usage for w in actives]
-            mean_load = statistics.mean(loads)
-            stdev_load = statistics.stdev(loads) if len(loads) > 1 else 0
+async def run_awareness_demo():
+    from triforce.odin.stan.ai_provider import AIProviderFactory, ProviderConfig
+    
+    # Mocks
+    class MockRegistry:
+        def list_all(self):
+            return [type("W",(),{
+                "node_id":"n1", "worker_name":"Loki", "status":"ACTIVE", 
+                "metrics": type("M",(),{"cpu_usage":95, "gpu_temp":88})(),
+                "specs": type("S",(),{"model":"MacBook"})(),
+                "last_seen": time.time()
+            })()]
+        def get_worker(self, nid): return self.list_all()[0]
+
+    class MockMemory:
+         async def get_context_for_reasoning(self, q): return "History: Loki overheats when running 70B models."
             
-            for w in actives:
-                if w.metrics.cpu_usage > (mean_load + 2 * stdev_load) and w.metrics.cpu_usage > 50:
-                    details.append(f"Node {w.worker_name} CPU load ({w.metrics.cpu_usage}%) significantly higher than cluster mean ({mean_load:.1f}%)")
-                    recommendations.append("Consider 'Distribute Workload' command.")
-
-        return AnomalyReport(
-            anomalies_detected=len(details),
-            details=details,
-            recommendations=recommendations
-        )
-
-    def recommend_rebalance(self) -> Optional[str]:
-        # Simple heuristic wrapper
-        report = self.detect_anomalies()
-        if "Consider 'Distribute Workload' command." in report.recommendations:
-             return "Hotspots detected. Recommendation: Trigger auto-rebalance."
-        return None
-
-# --- Mock Implementation for Demo ---
-
-class MockRegistry:
-    class MockWorker:
-        def __init__(self, nid, name, status, cpu, ram, gpu, gpu_temp, last_seen_delta):
-            self.node_id = nid
-            self.worker_name = name
-            self.status = status
-            self.specs = type("Specs", (), {"cpu_cores": 16, "memory_gb": 32, "gpu_available": gpu, "gpu_mem_total": 12000})()
-            self.metrics = type("Metrics", (), {"cpu_usage": cpu, "ram_usage": ram, "gpu_usage": 50, "gpu_temp": gpu_temp})()
-            self.last_seen = time.time() - last_seen_delta
-
-    def list_all(self):
-        return [
-            self.MockWorker("n1", "odin", "ACTIVE", 20, 30, True, 65, 5),
-            self.MockWorker("n2", "thor", "ACTIVE", 95, 40, True, 88, 5), # Hot & High CPU
-            self.MockWorker("n3", "loki", "ACTIVE", 10, 20, False, 0, 70), # Zombie latency
-        ]
+    # Setup
+    ai = AIProviderFactory.create(ProviderConfig(type="mock"))
+    mem = MockMemory()
+    brain = AwarenessBrain(MockRegistry(), ai, mem)
     
-    def get_worker(self, nid):
-        for w in self.list_all():
-            if w.node_id == nid: return w
-        return None
-
-# --- Sample Run ---
-
-def generate_report():
-    sys = AwarenessSystem(MockRegistry())
+    print("--- 1. Anomaly AI Diagnosis ---")
+    anomalies = await brain.detect_anomalies()
+    print(json.dumps({k: v.dict() for k,v in anomalies.items()}, indent=2))
     
-    # 1. Cluster State
-    state = sys.get_cluster_state()
-    print("=== Cluster State ===")
-    print(json.dumps(state.model_dump(), indent=2))
-    
-    # 2. Anomalies
-    print("\n=== Anomalies ===")
-    anoms = sys.detect_anomalies()
-    print(json.dumps(anoms.model_dump(), indent=2))
-    
-    # 3. Node Health
-    print("\n=== Detailed Health ===")
-    for nid in ["n1", "n2", "n3"]:
-        h = sys.get_node_health(nid)
-        status_icon = "🟢" if h.health_score > 0.8 else ("🟡" if h.health_score > 0.5 else "🔴")
-        print(f"{status_icon} Node {nid}: Score {h.health_score:.2f} | Risks: {h.risk_factors}")
+    print("\n--- 2. Predictions ---")
+    # Inject fake history
+    brain.metric_history["n1"] = [{"gpu_temp": 70}, {"gpu_temp": 80}, {"gpu_temp": 88}]
+    preds = await brain.get_predictions()
+    for p in preds:
+        print(f"Prediction: {p.reasoning} (Prob: {p.failure_probability})")
 
 if __name__ == "__main__":
-    generate_report()
+    asyncio.run(run_awareness_demo())
