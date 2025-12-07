@@ -215,6 +215,64 @@
         }
 
         .gpu-active {
+            border-color: #a855f7;
+            color: #d8b4fe;
+            box-shadow: 0 0 5px rgba(168, 85, 247, 0.2);
+        }
+
+        /* Job Console */
+        .job-console {
+            /* display: grid; grid-template-columns: 2fr 1fr; gap: 20px; */
+            background: #0a0a0a;
+            border: 1px solid var(--border);
+            padding: 20px;
+            margin-bottom: 30px;
+        }
+
+        .input-group {
+            margin-bottom: 15px;
+        }
+
+        .input-label {
+            display: block;
+            color: var(--text-secondary);
+            font-size: 12px;
+            margin-bottom: 5px;
+            text-transform: uppercase;
+        }
+
+        .console-input {
+            width: 100%;
+            background: #111;
+            border: 1px solid #333;
+            color: #a7f3d0;
+            padding: 10px;
+            font-family: 'Share Tech Mono', monospace;
+            box-sizing: border-box;
+        }
+
+        textarea.console-input {
+            height: 120px;
+            resize: vertical;
+        }
+
+        .btn-launch {
+            background: var(--text-secondary);
+            color: #000;
+            border: none;
+            padding: 10px 20px;
+            font-family: 'Share Tech Mono', monospace;
+            font-weight: bold;
+            cursor: pointer;
+            text-transform: uppercase;
+            width: 100%;
+            transition: all 0.2s;
+        }
+
+        .btn-launch:hover {
+            background: var(--accent);
+            box-shadow: 0 0 15px var(--accent);
+        }
     </style>
     <!-- SSE Real-time Updates -->
     <script>
@@ -319,7 +377,80 @@
                 `;
                 logContainer.appendChild(div);
             });
+            // Update Job History
+            if (data.recent_jobs) {
+                const historyBody = document.getElementById("history-table-body");
+                historyBody.innerHTML = "";
+                const jobs = data.recent_jobs.slice().reverse(); // Newest first
+
+                jobs.forEach(j => {
+                    const tr = document.createElement("tr");
+                    let resultShort = j.result ? JSON.stringify(j.result) : "-";
+                    if (resultShort.length > 50) resultShort = resultShort.substring(0, 50) + "...";
+
+                    tr.innerHTML = `
+                        <td>${j.job_id.substring(0, 8)}</td>
+                        <td><span class="status-badge status-${j.status.toLowerCase()}">${j.status}</span></td>
+                        <td>${j.worker}</td>
+                        <td style="font-size: 12px; color: #aaa;">${resultShort}</td>
+                     `;
+                    historyBody.appendChild(tr);
+                });
+            }
         };
+
+        async function submitJob() {
+            const code = document.getElementById("job-code").value;
+            const jobType = document.getElementById("job-type").value; // TODO: Add selector
+            const argsStr = document.getElementById("job-args").value;
+            let args = [];
+            try {
+                if (argsStr.trim()) args = JSON.parse(argsStr);
+            } catch (e) {
+                alert("Invalid JSON for Args");
+                return;
+            }
+
+            const payload = {
+                code: code,
+                entrypoint: "main", // simplified
+                args: args,
+                job_type: jobType,
+                requires_gpu: (jobType === "gpu_train" || jobType === "gpu_infer")
+            };
+
+            const btn = document.getElementById("btn-launch");
+            const originalText = btn.textContent;
+            btn.textContent = "TRANSMITTING...";
+            btn.disabled = true;
+
+            try {
+                // Must include token in header
+                const res = await fetch("/submit", {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                        "Authorization": `Bearer ${token}`
+                    },
+                    body: JSON.stringify(payload)
+                });
+
+                if (res.ok) {
+                    const data = await res.json();
+                    // alert("Job Submitted: " + data.job_id);
+                    // Don't alert, just reset
+                    // document.getElementById("job-code").value = "";
+                } else {
+                    const err = await res.text();
+                    alert("Failed: " + err);
+                }
+            } catch (e) {
+                alert("Error: " + e);
+            } finally {
+                btn.textContent = originalText;
+                btn.disabled = false;
+            }
+        }
     </script>
 </head>
 
@@ -348,6 +479,35 @@
             <div class="stat-card">
                 <div class="stat-value" id="queue-size">{{ queue_size }}</div>
                 <div class="stat-label">Pending Operations</div>
+            </div>
+        </div>
+
+        <h2 class="section-title">Mission Control</h2>
+        <div class="job-console">
+            <div style="display: flex; gap: 20px;">
+                <div style="flex: 2;">
+                    <div class="input-group">
+                        <label class="input-label">Payload Code (Python)</label>
+                        <textarea id="job-code" class="console-input"
+                            placeholder="def main(): return 'Hello World'"></textarea>
+                    </div>
+                </div>
+                <div style="flex: 1;">
+                    <div class="input-group">
+                        <label class="input-label">Operation Type</label>
+                        <select id="job-type" class="console-input">
+                            <option value="compute">Standard Compute</option>
+                            <option value="io_heavy">High I/O Ops</option>
+                            <option value="gpu_infer">GPU Inference</option>
+                            <option value="gpu_train">GPU Training</option>
+                        </select>
+                    </div>
+                    <div class="input-group">
+                        <label class="input-label">Arguments (JSON List)</label>
+                        <input id="job-args" class="console-input" placeholder="[]" value="[]">
+                    </div>
+                    <button id="btn-launch" class="btn-launch" onclick="submitJob()">INITIATE LAUNCH</button>
+                </div>
             </div>
         </div>
 
@@ -423,6 +583,23 @@
                     <td style="color: var(--warning);">{{ "%.2f"|format(scores.get(w.url, 0)) }}</td>
                 </tr>
                 {% endfor %}
+            </tbody>
+        </table>
+
+        </table>
+
+        <h2 class="section-title">Operation History</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Status</th>
+                    <th>Node</th>
+                    <th>Output</th>
+                </tr>
+            </thead>
+            <tbody id="history-table-body">
+                <!-- Populated by JS -->
             </tbody>
         </table>
 

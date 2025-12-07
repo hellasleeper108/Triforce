@@ -77,7 +77,8 @@ async def event_generator(request: Request):
             "total_active_jobs": sum(w.active_jobs for w in workers),
             "queue_size": scheduler.queue.qsize(),
             "workers": worker_data,
-            "logs": list(log_buffer.formatted_buffer)[-50:] # Tail 50
+            "logs": list(log_buffer.formatted_buffer)[-50:], # Tail 50
+            "recent_jobs": [j.model_dump() for j in list(job_history)[-20:]] # Tail 20 jobs
         }
         
         yield f"data: {json.dumps(data)}\n\n"
@@ -136,17 +137,21 @@ async def submit_job(submission: JobSubmission):
     job_id = str(uuid.uuid4())
     logger.info(f"Received job submission {job_id}")
 
-    # Upload Payload to MinIO
-    payload = {
-        "code": submission.code,
-        "entrypoint": submission.entrypoint,
-        "args": submission.args
-    }
-    payload_path = f"jobs/{job_id}/payload.json"
+    payload_path = None
     
-    # Run blocking I/O in executor to avoid freezing the loop
-    try:
-        if storage:
+    # Upload Payload to MinIO ONLY if large (>2KB) to support workers without storage access for small tasks
+    use_storage = storage and (len(submission.code) > 2048 or len(str(submission.args)) > 2048)
+    
+    if use_storage:
+        payload = {
+            "code": submission.code,
+            "entrypoint": submission.entrypoint,
+            "args": submission.args
+        }
+        payload_path = f"jobs/{job_id}/payload.json"
+        
+        # Run blocking I/O in executor to avoid freezing the loop
+        try:
             logger.info(f"Uploading payload to {payload_path}")
             loop = asyncio.get_event_loop()
             await loop.run_in_executor(
@@ -154,16 +159,16 @@ async def submit_job(submission: JobSubmission):
                 lambda: storage.upload_bytes(json.dumps(payload).encode("utf-8"), payload_path)
             )
             logger.info(f"Upload complete: {payload_path}")
-    except Exception as e:
-        logger.error(f"Failed to upload payload for {job_id}: {e}")
-        raise HTTPException(status_code=500, detail="Storage upload failed")
+        except Exception as e:
+            logger.error(f"Failed to upload payload for {job_id}: {e}")
+            raise HTTPException(status_code=500, detail="Storage upload failed")
     
     future = asyncio.get_event_loop().create_future()
     request = JobRequest(
         id=job_id,
-        code="", # Clear code from request to save bandwidth if payload_path is used
+        code="" if payload_path else submission.code, # Clear code only if uploaded
         entrypoint=submission.entrypoint,
-        args=[], # Clear args from request
+        args=[] if payload_path else submission.args, # Clear args only if uploaded
         requires_gpu=submission.requires_gpu,
         job_type=submission.job_type,
         payload_path=payload_path
