@@ -38,16 +38,22 @@ async def verify_token(request: Request, credentials: Optional[HTTPAuthorization
 
 app = FastAPI(title="ODIN Controller (Triforce)", dependencies=[Depends(verify_token)])
 
+from triforce.odin.stan.supernova import STANSupernova
+
 # Initialize components
 cluster = ClusterManager()
 scheduler = Scheduler(cluster)
 workflow_manager = WorkflowManager(scheduler, scheduler.store)
+# Check if we have a key for Gemini, otherwise mock
+use_mock = os.getenv("GEMINI_API_KEY") is None
+stan = STANSupernova(use_mock=use_mock) # Unified AI Core
 
 # Inject dependencies into router (Naive injection, or better using Depends)
 routes.cluster = cluster
 routes.scheduler = scheduler
 routes.storage = StorageClient() # MinIO connection
 routes.workflow_manager = workflow_manager
+routes.stan = stan
 
 app.include_router(routes.router)
 

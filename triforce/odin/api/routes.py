@@ -21,27 +21,120 @@ from triforce.common.storage.client import StorageClient
 
 from typing import Dict, Any
 
+from pydantic import BaseModel
+from triforce.odin.stan.supernova import STANSupernova
+from typing import Optional, List, Dict, Any
+
 # Globals (Injected from main)
 cluster = None
 scheduler = None
 storage = None # Will be injected
 workflow_manager = None
+stan: Optional[STANSupernova] = None
+
+class CommandRequest(BaseModel):
+    text: str
+
+class ModelSwitchRequest(BaseModel):
+    model_name: str
 
 @router.post("/register")
-def register_worker(data: RegistrationData):
+async def register_worker_node(data: RegistrationData):
+    # Determine IP - simplified logic or trust payload
+    # In a real scenario we might verify request.client.host
     cluster.register(data)
-    return {"status": "registered"}
+    return {"status": "registered", "ttl": 15}
 
-@router.get("/nodes")
-async def get_nodes():
-    return cluster.get_snapshot()
+# --- Endpoints ---
 
-@router.get("/cluster/state")
+@router.get("/api/stan/models")
+async def get_stan_models():
+    """List all available AI models and their active status."""
+    if not stan:
+        raise HTTPException(status_code=503, detail="STAN AI is offline")
+    return {"models": stan.get_models()}
+
+@router.post("/api/stan/models")
+async def set_stan_model(req: ModelSwitchRequest):
+    """Set the active AI model."""
+    if not stan:
+        raise HTTPException(status_code=503, detail="STAN AI is offline")
+    success = stan.set_model(req.model_name)
+    if not success:
+         raise HTTPException(status_code=400, detail=f"Model {req.model_name} not found.")
+    return {"status": "ok", "active_model": req.model_name}
+
+@router.post("/api/commands")
+async def send_command(cmd: CommandRequest):
+    if not stan:
+        raise HTTPException(status_code=503, detail="STAN AI is offline")
+    
+    print(f"[Dashboard] Received command: {cmd.text}")
+    # Use direct return value from act()
+    response = await stan.act(cmd.text)
+    return {"response": response}
+
+@router.post("/api/stan/launch")
+async def launch_stan():
+    if not stan:
+        raise HTTPException(status_code=503, detail="STAN AI is offline")
+        
+    print("[Dashboard] Launching STAN...")
+    # Use direct return value from act()
+    response = await stan.act("System Startup")
+    return {"message": "STAN Activated", "details": response}
+
+@router.get("/api/cluster/state")
 async def get_cluster_state():
+    workers = cluster.get_snapshot()
+    
+    # Map to HUD format
+    nodes = []
+    tasks = []
+    
+    # Add Master Node
+    nodes.append({
+        "id": "odin-master",
+        "role": "Master",
+        "status": "Online",
+        "cpu": 15, # Placeholder or psutil on master
+        "ram": 25,
+        "gpu": 0
+    })
+    
+    for w in workers:
+        nodes.append({
+            "id": w.node_id,
+            "role": w.specs.get("worker_class", "Worker"),
+            "status": w.status,
+            "cpu": w.metrics.get("cpu_usage", 0),
+            "ram": w.metrics.get("ram_usage", 0),
+            "gpu": w.metrics.get("gpu_usage", 0)
+        })
+        
+    # Map Active Jobs
+    for jid, job in scheduler.jobs.items():
+        if job.status in ["RUNNING", "QUEUED"]:
+            tasks.append({
+                "id": jid[:8],
+                "node": job.worker_url.split("//")[-1] if job.worker_url else "pending",
+                "status": job.status,
+                "elapsed": "0s" # simpler for now
+            })
+            
+    alerts = []
+    if scheduler.queue.qsize() > 5:
+        alerts.append({"level": "warning", "msg": "High Queue Depth"})
+        
     return {
         "timestamp": time.time(),
-        "worker_count": len(cluster.workers),
-        "topology": cluster.get_snapshot()
+        "worker_count": len(workers),
+        "topology": workers,
+        # HUD Extras
+        "nodes": nodes,
+        "tasks": tasks,
+        "alerts": alerts,
+        "recent_jobs": [j.model_dump() for j in list(job_history)[-20:]]
     }
 
 async def event_generator(request: Request):
@@ -84,7 +177,7 @@ async def event_generator(request: Request):
         yield f"data: {json.dumps(data)}\n\n"
         await asyncio.sleep(0.5)
 
-@router.get("/events")
+@router.get("/api/events")
 async def sse_endpoint(request: Request):
     return StreamingResponse(event_generator(request), media_type="text/event-stream")
 
@@ -112,7 +205,7 @@ async def dashboard(request: Request):
 
 job_history = collections.deque(maxlen=1000)
 
-@router.get("/jobs/{job_id}", response_model=JobResponse)
+@router.get("/api/jobs/{job_id}", response_model=JobResponse)
 async def get_job_status(job_id: str):
     # 1. Check live active/queued jobs
     if job_id in scheduler.jobs:
@@ -132,7 +225,7 @@ async def get_job_status(job_id: str):
             
     raise HTTPException(status_code=404, detail="Job not found")
 
-@router.post("/submit", response_model=JobResponse)
+@router.post("/api/submit", response_model=JobResponse)
 async def submit_job(submission: JobSubmission):
     job_id = str(uuid.uuid4())
     logger.info(f"Received job submission {job_id}")
@@ -198,11 +291,11 @@ async def submit_job(submission: JobSubmission):
     job_history.append(response)
     return response
 
-@router.get("/logs")
+@router.get("/api/logs")
 async def get_buffer_logs():
     return list(log_buffer.formatted_buffer)
 
-@router.get("/logs/{node_id}")
+@router.get("/api/logs/{node_id}")
 async def get_worker_logs(node_id: str, limit: int = 100):
     API_TOKEN = os.getenv("API_TOKEN", "default-insecure-token")
     target_worker = next((w for w in cluster.workers.values() if w.metrics.get("node_id") == node_id), None)
@@ -220,7 +313,7 @@ async def get_worker_logs(node_id: str, limit: int = 100):
 # --- Workflow Endpoints ---
 from triforce.common.models.workflows import WorkflowRequest, WorkflowResponse
 
-@router.post("/workflows", response_model=Dict[str, Any])
+@router.post("/api/workflows", response_model=Dict[str, Any])
 async def submit_workflow(request: WorkflowRequest):
     if not workflow_manager:
         raise HTTPException(status_code=503, detail="Workflow Manager not initialized")
@@ -232,7 +325,25 @@ async def submit_workflow(request: WorkflowRequest):
         logger.exception(f"Failed to submit workflow")
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.get("/workflows/{workflow_id}", response_model=WorkflowResponse)
+@router.get("/api/workflows", response_model=List[WorkflowResponse])
+async def list_workflows():
+    if not workflow_manager:
+        return []
+        
+    responses = []
+    for wf in workflow_manager.active_workflows.values():
+         step_statuses = {sid: s["status"] for sid, s in wf.step_states.items()}
+         responses.append(WorkflowResponse(
+             workflow_id=wf.workflow_id,
+             status=wf.status,
+             step_statuses=step_statuses,
+             created_at=wf.created_at
+         ))
+    # Sort by created_at desc
+    responses.sort(key=lambda x: x.created_at, reverse=True)
+    return responses
+
+@router.get("/api/workflows/{workflow_id}", response_model=WorkflowResponse)
 async def get_workflow_status(workflow_id: str):
     if not workflow_manager:
         raise HTTPException(status_code=503, detail="Workflow Manager not initialized")

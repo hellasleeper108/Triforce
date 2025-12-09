@@ -17,6 +17,14 @@ class OllamaProvider(AIProvider):
         super().__init__(config)
         self.logger = logging.getLogger("stan.ai.ollama")
         self.base_url = config.base_url.rstrip('/')
+        
+        # Auto-select valid model if default is missing
+        available = self.get_available_models()
+        valid_names = [m["name"] for m in available]
+        
+        if config.default_model not in valid_names and valid_names:
+            self.logger.warning(f"Default model '{config.default_model}' not found. Switching to '{valid_names[0]}'.")
+            self.config.default_model = valid_names[0]
 
     async def generate(self, prompt: str, system: Optional[str] = None, model: Optional[str] = None, **kwargs) -> str:
         """
@@ -91,6 +99,36 @@ class OllamaProvider(AIProvider):
         self.logger.warning(f"Classification ambiguous. Raw: '{clean_result}'. Defaulting to {labels[0]}.")
         return labels[0]
 
+    def set_active_model(self, model_name: str) -> bool:
+        """Sets the default model for generation."""
+        # For Ollama, we trust the user if the model exists in the list we fetch
+        self.logger.info(f"Switching active model to: {model_name}")
+        self.config.default_model = model_name
+        return True
+        
+    def get_available_models(self) -> List[Dict[str, Any]]:
+        """Returns list of available models from Ollama API."""
+        import requests
+        try:
+            resp = requests.get(f"{self.base_url}/api/tags", timeout=5)
+            if resp.status_code == 200:
+                data = resp.json()
+                models = []
+                for m in data.get("models", []):
+                    name = m.get("name")
+                    models.append({
+                        "name": name,
+                        "active": name == self.config.default_model,
+                        "platform": "gpu", # Assume local means GPU/CPU hybrid
+                        "capabilities": ["generate"] # Basic assumption
+                    })
+                return models
+        except Exception as e:
+            self.logger.error(f"Failed to fetch models from Ollama: {e}")
+        
+        # Fallback to config if API fails
+        return super().get_available_models()
+
     # --- Internal Helpers ---
 
     async def _call_generate_api(self, prompt: str, system: Optional[str], model: Optional[str], stream: bool = False, **kwargs) -> Dict[str, Any]:
@@ -137,8 +175,21 @@ class OllamaProvider(AIProvider):
                         
                         self.logger.info(f"Generated {len(data.get('response', ''))} chars via {target_model} in {latency:.2f}ms")
                         
+                        text_response = data.get("response", "")
+
+                        # Fallback for models that fail with strict JSON format
+                        if not text_response and payload.get("format") == "json":
+                             self.logger.warning(f"Model {target_model} returned empty response with format='json'. Retrying without strict format...")
+                             payload.pop("format")
+                             # Retry immediately (nested to avoid loop complexity)
+                             async with session.post(url, json=payload, timeout=self.config.timeout_sec) as retry_resp:
+                                 if retry_resp.status == 200:
+                                     retry_data = await retry_resp.json()
+                                     text_response = retry_data.get("response", "")
+                                     self.logger.info(f"Retry success: Generated {len(text_response)} chars.")
+                        
                         return {
-                            "text": data.get("response", ""),
+                            "text": text_response,
                             "raw": data,
                             "latency_ms": latency
                         }

@@ -4,329 +4,414 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>STAN Cluster HUD</title>
+    <title>STAN // REACTOR CONTROL</title>
     <style>
+        @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap');
+
         :root {
-            --bg-dark: #0f1115;
-            --bg-card: #161b22;
-            --text-primary: #e6edf3;
-            --text-secondary: #8b949e;
-            --accent: #58a6ff;
-            --danger: #f85149;
-            --success: #3fb950;
-            --warning: #d29922;
-            --border: #30363d;
+            --bg-color: #111;
+            --panel-bg: #1a1a1a;
+            --primary: #ffd700;
+            /* Hazard Yellow */
+            --danger: #ff3333;
+            /* Reactor Red */
+            --off-white: #e0e0e0;
+            --grid-color: #333;
         }
 
         body {
-            background-color: var(--bg-dark);
-            color: var(--text-primary);
-            font-family: 'Segoe UI', system-ui, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--primary);
+            font-family: 'Share Tech Mono', monospace;
             margin: 0;
-            padding: 20px;
-            display: grid;
-            grid-template-rows: auto 1fr auto;
             height: 100vh;
-            box-sizing: border-box;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            background-image:
+                linear-gradient(var(--grid-color) 1px, transparent 1px),
+                linear-gradient(90deg, var(--grid-color) 1px, transparent 1px);
+            background-size: 50px 50px;
         }
 
-        header {
+        /* --- Hazard Stripes --- */
+        .hazard-bar {
+            height: 15px;
+            width: 100%;
+            background: repeating-linear-gradient(45deg,
+                    var(--primary),
+                    var(--primary) 10px,
+                    #000 10px,
+                    #000 20px);
+            box-shadow: 0 0 10px var(--primary);
+        }
+
+        .header {
+            background: #000;
+            border-bottom: 2px solid var(--primary);
+            padding: 10px 20px;
             display: flex;
             justify-content: space-between;
             align-items: center;
-            padding-bottom: 20px;
-            border-bottom: 1px solid var(--border);
+            font-size: 1.5rem;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            z-index: 10;
+        }
+
+        .status-badge {
+            background: #000;
+            border: 1px solid var(--danger);
+            color: var(--danger);
+            padding: 5px 15px;
+            font-size: 1rem;
+            animation: pulse-red 2s infinite;
+        }
+
+        @keyframes pulse-red {
+            0% {
+                box-shadow: 0 0 5px var(--danger);
+                text-shadow: 0 0 5px var(--danger);
+            }
+
+            50% {
+                box-shadow: 0 0 20px var(--danger);
+                text-shadow: 0 0 10px var(--danger);
+            }
+
+            100% {
+                box-shadow: 0 0 5px var(--danger);
+                text-shadow: 0 0 5px var(--danger);
+            }
+        }
+
+        /* --- Layout Grid --- */
+        .main-container {
+            display: grid;
+            grid-template-columns: 300px 1fr 300px;
+            grid-template-rows: 1fr;
+            /* Full height */
+            gap: 20px;
+            padding: 20px;
+            height: calc(100vh - 60px);
+        }
+
+        .panel {
+            background: var(--panel-bg);
+            border: 2px solid var(--primary);
+            display: flex;
+            flex-direction: column;
+            position: relative;
+            box-shadow: 0 0 15px rgba(0, 0, 0, 0.8);
+        }
+
+        .panel-header {
+            background: var(--primary);
+            color: #000;
+            padding: 5px 10px;
+            font-weight: bold;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            display: flex;
+            justify-content: space-between;
+        }
+
+        .panel-content {
+            padding: 15px;
+            flex-grow: 1;
+            overflow-y: auto;
+            color: var(--off-white);
+        }
+
+        /* --- Gauges & Stats --- */
+        .gauge-container {
             margin-bottom: 20px;
         }
 
-        h1 {
-            margin: 0;
-            font-weight: 300;
-            letter-spacing: 1px;
-        }
-
-        .grid-container {
-            display: grid;
-            grid-template-columns: 2fr 1fr;
-            gap: 20px;
-            height: 100%;
-            overflow: hidden;
-        }
-
-        .left-col {
+        .gauge-label {
             display: flex;
-            flex-direction: column;
-            gap: 20px;
+            justify-content: space-between;
+            margin-bottom: 5px;
+            color: var(--primary);
         }
 
-        .right-col {
-            display: flex;
-            flex-direction: column;
-            gap: 20px;
-        }
-
-        .card {
-            background: var(--bg-card);
-            border: 1px solid var(--border);
-            border-radius: 6px;
-            padding: 15px;
-        }
-
-        .card-header {
-            font-weight: bold;
-            margin-bottom: 15px;
-            color: var(--text-secondary);
-            text-transform: uppercase;
-            font-size: 0.85em;
-        }
-
-        /* Node Cards */
-        .nodes-grid {
-            display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            gap: 15px;
-        }
-
-        .node-card {
-            background: #0d1117;
-            padding: 15px;
-            border-radius: 6px;
-            border: 1px solid var(--border);
-        }
-
-        .node-name {
-            font-weight: bold;
-            font-size: 1.1em;
-            color: var(--accent);
-        }
-
-        .node-role {
-            font-size: 0.8em;
-            color: var(--text-secondary);
-        }
-
-        .metric-row {
-            margin-top: 10px;
-            font-size: 0.9em;
-        }
-
-        .metric-label {
-            color: var(--text-secondary);
-        }
-
-        .bar-container {
-            background: #21262d;
-            height: 6px;
-            border-radius: 3px;
-            margin-top: 5px;
-            overflow: hidden;
-        }
-
-        .bar-fill {
-            height: 100%;
-            background: var(--success);
-            transition: width 0.5s ease;
-        }
-
-        .high-load {
-            background: var(--danger);
-        }
-
-        /* Tasks Table */
-        table {
+        .gauge-bar-bg {
+            background: #333;
+            height: 10px;
             width: 100%;
-            border-collapse: collapse;
-            font-size: 0.9em;
+            border: 1px solid #555;
         }
 
-        th,
-        td {
-            text-align: left;
-            padding: 8px;
-            border-bottom: 1px solid var(--border);
+        .gauge-bar-fill {
+            height: 100%;
+            background: var(--primary);
+            width: 0%;
+            transition: width 0.5s ease;
+            box-shadow: 0 0 5px var(--primary);
         }
 
-        th {
-            color: var(--text-secondary);
-        }
-
-        /* Terminal / Command */
-        .terminal-output {
-            flex-grow: 1;
+        /* --- Terminal --- */
+        #neural-output {
             background: #000;
-            padding: 10px;
-            font-family: 'Consolas', monospace;
-            font-size: 0.9em;
-            color: #ccc;
+            border: 1px solid var(--primary);
+            height: 70%;
             overflow-y: auto;
-            border-radius: 4px;
-            white-space: pre-wrap;
+            padding: 10px;
+            font-family: 'Share Tech Mono', monospace;
+            color: var(--off-white);
+            margin-bottom: 10px;
         }
 
-        .input-group {
+        .msg-user {
+            color: #aaa;
+            margin-bottom: 5px;
+        }
+
+        .msg-stan {
+            color: var(--primary);
+            margin-bottom: 15px;
+            text-shadow: 0 0 2px var(--primary);
+        }
+
+        .input-bar {
             display: flex;
             gap: 10px;
-            margin-top: 10px;
         }
 
         input[type="text"] {
+            background: #000;
+            border: 1px solid var(--primary);
+            color: var(--primary);
             flex-grow: 1;
-            background: var(--bg-dark);
-            border: 1px solid var(--border);
-            color: var(--text-primary);
             padding: 10px;
-            border-radius: 4px;
+            font-family: 'Share Tech Mono', monospace;
+            font-size: 1.1rem;
         }
 
         button {
-            background: var(--success);
-            color: white;
-            border: none;
+            background: #000;
+            color: var(--primary);
+            border: 1px solid var(--primary);
             padding: 10px 20px;
-            border-radius: 4px;
-            cursor: pointer;
+            font-family: 'Share Tech Mono', monospace;
             font-weight: bold;
+            cursor: pointer;
+            text-transform: uppercase;
+            transition: all 0.2s;
         }
 
         button:hover {
-            opacity: 0.9;
+            background: var(--primary);
+            color: #000;
+            box-shadow: 0 0 15px var(--primary);
+        }
+
+        /* --- Right Panel Controls --- */
+        .control-group {
+            margin-bottom: 30px;
+            border-bottom: 1px dashed #444;
+            padding-bottom: 20px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 10px;
+            color: var(--primary);
+        }
+
+        select {
+            width: 100%;
+            background: #000;
+            color: var(--off-white);
+            border: 1px solid var(--primary);
+            padding: 8px;
+            font-family: 'Share Tech Mono', monospace;
+        }
+
+        .log-stream {
+            font-size: 0.8rem;
+            height: 200px;
+            overflow-y: auto;
+            background: #000;
+            padding: 5px;
+            border: 1px solid #444;
+            color: #888;
         }
     </style>
 </head>
 
 <body>
+    <div class="hazard-bar"></div>
+    <div class="header">
+        <div>STAN // REACTOR CORE</div>
+        <div class="status-badge">SYSTEM CRITICAL</div>
+    </div>
 
-    <header>
-        <h1>STAN <span style="color:var(--accent)">Control Deck</span></h1>
-        <div id="status-badge" style="color:var(--success)">● System Online</div>
-    </header>
-
-    <div class="grid-container">
-        <div class="left-col">
-            <!-- Node Status -->
-            <div class="card">
-                <div class="card-header">Cluster Nodes</div>
-                <div class="nodes-grid" id="nodes-container">
-                    <!-- Injected via JS -->
-                </div>
+    <div class="main-container">
+        <!-- LEFT: TELEMETRY -->
+        <div class="panel">
+            <div class="panel-header">
+                <span>CORE TELEMETRY</span>
+                <span>ODIN-1</span>
             </div>
+            <div class="panel-content">
+                <div class="gauge-container">
+                    <div class="gauge-label">
+                        <span>CPU TEMP</span>
+                        <span id="cpu-val">0%</span>
+                    </div>
+                    <div class="gauge-bar-bg">
+                        <div id="cpu-bar" class="gauge-bar-fill"></div>
+                    </div>
+                </div>
 
-            <!-- Active Tasks -->
-            <div class="card" style="flex-grow: 1;">
-                <div class="card-header">Active Operations</div>
-                <table id="tasks-table">
-                    <thead>
-                        <tr>
-                            <th>Task ID</th>
-                            <th>Node</th>
-                            <th>Status</th>
-                            <th>Elapsed</th>
-                        </tr>
-                    </thead>
-                    <tbody></tbody>
-                </table>
+                <div class="gauge-container">
+                    <div class="gauge-label">
+                        <span>RAM PRESSURE</span>
+                        <span id="ram-val">0%</span>
+                    </div>
+                    <div class="gauge-bar-bg">
+                        <div id="ram-bar" class="gauge-bar-fill" style="background: var(--danger)"></div>
+                    </div>
+                </div>
+
+                <div class="gauge-container">
+                    <div class="gauge-label">
+                        <span>NODE STATUS</span>
+                        <span style="color:var(--primary)">ONLINE</span>
+                    </div>
+                    <div style="font-size:0.8rem; color:#666; margin-top:5px;">
+                        UPTIME: 420h 69m<br>
+                        PID: 354305
+                    </div>
+                </div>
             </div>
         </div>
 
-        <div class="right-col">
-            <!-- Alerts -->
-            <div class="card" style="height: 30%;">
-                <div class="card-header">System Alerts</div>
-                <div id="alerts-container" style="font-size: 0.9em;"></div>
-            </div>
-
-            <!-- Command Console -->
-            <div class="card" style="flex-grow: 1; display: flex; flex-direction: column;">
-                <div class="card-header">Neural Interface (STAN AI)</div>
-                <div class="terminal-output" id="terminal">
-                    <div style="color:var(--accent)">> Connecting to STAN Supernova... [CONNECTED]</div>
-                    <div>Waiting for instructions...</div>
+        <!-- CENTER: COMMAND DECK -->
+        <div class="panel">
+            <div class="panel-header">NEURAL LINK INTERFACE</div>
+            <div class="panel-content" style="display:flex; flex-direction:column;">
+                <div id="neural-output">
+                    <div style="color:#666">INITIALIZING NEURAL LINK...</div>
+                    <div class="msg-stan">STAN ONLINE. AWAITING INPUT.</div>
                 </div>
-                <div class="input-group">
-                    <input type="text" id="cmd-input" placeholder="e.g., 'Check status of Thor' or 'Deploy Llama-3'"
+
+                <div class="input-bar">
+                    <input type="text" id="cmd-input" placeholder="ENTER COMMAND SEQUENCE..."
                         onkeypress="handleEnter(event)">
-                    <button onclick="sendCommand()">SEND</button>
+                    <button onclick="sendCommand()">EXECUTE</button>
+                </div>
+
+                <div style="margin-top:20px; border-top:1px solid #333; padding-top:10px;">
+                    <div style="color:var(--primary); font-size:0.9rem; margin-bottom:5px;">BLACK BOX RECORDER (LOGS)
+                    </div>
+                    <div class="log-stream" id="logs-view">
+                        <!-- Logs go here -->
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- RIGHT: CONTROLS -->
+        <div class="panel">
+            <div class="panel-header">CONFIGURATION RODS</div>
+            <div class="panel-content">
+                <div class="control-group">
+                    <label>ACTIVE MODEL</label>
+                    <select id="model-select" onchange="switchModel(this.value)">
+                        <option>LOADING...</option>
+                    </select>
+                </div>
+
+                <div class="control-group">
+                    <label>QUICK ACTIONS</label>
+                    <button style="width:100%; margin-bottom:10px;"
+                        onclick="sendCommand('Generate Status Report')">SYSTEM SCAN</button>
+                    <button style="width:100%; margin-bottom:10px;" onclick="sendCommand('Clear Memory')">PURGE
+                        MEMORY</button>
+                    <button style="width:100%; border-color:var(--danger); color:var(--danger);"
+                        onclick="alert('SCRAM DISABLED')">EMERGENCY SCRAM</button>
                 </div>
             </div>
         </div>
     </div>
 
     <script>
-        async function updateState() {
+        // --- LOGIC ---
+
+        async function fetchState() {
             try {
                 const res = await fetch('/api/cluster/state');
                 const data = await res.json();
+                const node = data.nodes[0]; // Odin
 
-                // Render Nodes
-                const nodesContainer = document.getElementById('nodes-container');
-                nodesContainer.innerHTML = data.nodes.map(n => {
-                    const cpuColor = n.cpu > 80 ? 'high-load' : '';
-                    const gpuColor = n.gpu > 80 ? 'high-load' : '';
-                    return `
-                <div class="node-card">
-                    <div class="node-name">${n.id}</div>
-                    <div class="node-role">${n.role} • ${n.status}</div>
-                    
-                    <div class="metric-row">
-                        <span class="metric-label">CPU ${n.cpu}%</span>
-                        <div class="bar-container"><div class="bar-fill ${cpuColor}" style="width: ${n.cpu}%"></div></div>
-                    </div>
-                    <div class="metric-row">
-                        <span class="metric-label">RAM ${n.ram}%</span>
-                        <div class="bar-container"><div class="bar-fill" style="width: ${n.ram}%"></div></div>
-                    </div>
-                    <div class="metric-row">
-                        <span class="metric-label">GPU ${n.gpu}%</span>
-                        <div class="bar-container"><div class="bar-fill ${gpuColor}" style="width: ${n.gpu}%"></div></div>
-                    </div>
-                </div>`;
-                }).join('');
+                // Update Gauges
+                document.getElementById('cpu-val').innerText = node.cpu + '%';
+                document.getElementById('cpu-bar').style.width = node.cpu + '%';
 
-                // Render Tasks
-                const tasksTable = document.querySelector('#tasks-table tbody');
-                tasksTable.innerHTML = data.tasks.map(t =>
-                    `<tr><td>${t.id}</td><td>${t.node}</td><td>${t.status}</td><td>${t.elapsed}</td></tr>`
-                ).join('');
-
-                // Render Alerts
-                const alertsContainer = document.getElementById('alerts-container');
-                alertsContainer.innerHTML = data.alerts.filter(a => a).map(a =>
-                    `<div style="margin-bottom:5px; color:${a.level === 'warning' ? '#d29922' : '#e6edf3'}">
-                    • ${a.msg}
-                </div>`
-                ).join('');
+                document.getElementById('ram-val').innerText = node.ram + '%';
+                document.getElementById('ram-bar').style.width = node.ram + '%';
 
             } catch (e) {
-                console.error("Fetch error", e);
+                console.error("Telemetry failure", e);
             }
         }
 
-        async function sendCommand() {
-            const input = document.getElementById('cmd-input');
-            const term = document.getElementById('terminal');
-            const text = input.value;
-            if (!text) return;
+        async function fetchModels() {
+            try {
+                const res = await fetch('/api/stan/models');
+                const data = await res.json();
+                const sel = document.getElementById('model-select');
+                sel.innerHTML = '';
 
-            term.innerHTML += `\n<div style="color:var(--text-secondary)">> ${text}</div>`;
-            input.value = '';
-            term.scrollTop = term.scrollHeight;
+                data.models.forEach(m => {
+                    const opt = document.createElement('option');
+                    opt.value = m;
+                    opt.innerText = m;
+                    if (m === data.current_model) opt.selected = true;
+                    sel.appendChild(opt);
+                });
+            } catch (e) {
+                console.error("Model fetch failure", e);
+            }
+        }
+
+        async function switchModel(name) {
+            await fetch('/api/stan/models', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ model_name: name })
+            });
+            // Visual feedback could go here
+        }
+
+        async function sendCommand(text = null) {
+            const input = document.getElementById('cmd-input');
+            const cmd = text || input.value;
+            if (!cmd) return;
+
+            // Optimistic UI
+            const out = document.getElementById('neural-output');
+            out.innerHTML += `<div class="msg-user">USER: ${cmd}</div>`;
+            if (!text) input.value = '';
+            out.scrollTop = out.scrollHeight;
 
             try {
-                term.innerHTML += `<div>[Thinking...]</div>`;
                 const res = await fetch('/api/commands', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ text: text })
+                    body: JSON.stringify({ text: cmd })
                 });
                 const data = await res.json();
 
-                // Remove "Thinking" loading text (simple hack)
-                term.innerHTML = term.innerHTML.replace('<div>[Thinking...]</div>', '');
+                // Format response (handle newlines)
+                const formatted = data.response.replace(/\n/g, '<br>');
+                out.innerHTML += `<div class="msg-stan">${formatted}</div>`;
+                out.scrollTop = out.scrollHeight;
 
-                term.innerHTML += `<div style="color:var(--success)">${data.response}</div>`;
-                term.scrollTop = term.scrollHeight;
             } catch (e) {
-                term.innerHTML += `<div style="color:var(--danger)">Error: Failed to reach STAN.</div>`;
+                out.innerHTML += `<div style="color:var(--danger)">ERROR: TRANSMISSION FAILED</div>`;
             }
         }
 
@@ -334,9 +419,22 @@
             if (e.key === 'Enter') sendCommand();
         }
 
-        // Loop
-        setInterval(updateState, 2000);
-        updateState();
+        // --- Event Stream for Logs ---
+        const evtSource = new EventSource("/api/events");
+        evtSource.onmessage = function (event) {
+            const logsView = document.getElementById('logs-view');
+            const newLog = document.createElement("div");
+            newLog.style.marginBottom = "2px";
+            newLog.innerText = `> ${event.data}`;
+            logsView.appendChild(newLog);
+            logsView.scrollTop = logsView.scrollHeight;
+        }
+
+        // --- Init ---
+        setInterval(fetchState, 2000); // 2s polling for stats
+        fetchState();
+        fetchModels();
+
     </script>
 </body>
 

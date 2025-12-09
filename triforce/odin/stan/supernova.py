@@ -14,6 +14,8 @@ from triforce.odin.stan.forecasting import PredictiveBrain, TelemetryPoint
 from triforce.odin.stan.skills import SkillManager
 from triforce.odin.stan.metacognition import MetacognitionEngine
 from triforce.odin.stan.assembly import AssemblyEngine, PipelineStep
+from triforce.odin.stan.ai_provider import AIProviderFactory, ProviderConfig, DEFAULT_GEMINI_CONFIG, DEFAULT_MOCK_CONFIG
+import os
 # Agents
 from triforce.odin.stan.agents.impl import ShardMasterAgent, ScribeAgent, OptimizerAgent, SentinelAgent
 
@@ -25,11 +27,28 @@ class STANSupernova:
 
     def __init__(self, use_mock: bool = True):
         # 1. Logging
-        logging.basicConfig(level=logging.INFO, format='%(name)s: %(message)s')
+        # We rely on the root logger configured in app.py or fallback
         self.logger = logging.getLogger("stan.supernova")
         
         # 2. Base AI
-        config = ProviderConfig(type="mock" if use_mock else "openai")
+        # Check Env Override
+        env_provider = os.getenv("STAN_AI_PROVIDER", "mock" if use_mock else "ollama")
+        
+        if env_provider == "gemini":
+            self.logger.info("Initializing STAN with Gemini 3 (Experimental)...")
+            config = DEFAULT_GEMINI_CONFIG
+            # Inject key if present in env (Provider handles it, but config might need it explicit if strict)
+            config.api_key = os.getenv("GEMINI_API_KEY") 
+        elif env_provider == "ollama":
+             # Construct on fly or use default
+             config = ProviderConfig(type="ollama", base_url=os.getenv("OLLAMA_HOST", "http://localhost:11434"))
+        elif env_provider == "mock":
+             config = DEFAULT_MOCK_CONFIG
+        else:
+             # Default to Ollama for production/local use
+             self.logger.info("Defaulting to Ollama Provider.")
+             config = ProviderConfig(type="ollama", base_url=os.getenv("OLLAMA_HOST", "http://localhost:11434"))
+             
         self.ai = AIProviderFactory.create(config)
         
         # 3. Core Subsystems
@@ -55,39 +74,66 @@ class STANSupernova:
 
     # --- Primary Interaction API ---
 
-    async def act(self, command: str):
+    def get_models(self) -> List[Dict[str, Any]]:
+        return self.ai.get_available_models()
+        
+    def set_model(self, model_name: str) -> bool:
+        success = self.ai.set_active_model(model_name)
+        if success:
+             self.logger.info(f"Active Model Switched to: {model_name}")
+        return success
+
+    async def act(self, command: str) -> str:
         """
         The OODA Loop: Observe, Orient, Decide, Act.
+        Returns a transcript of the reasoning process.
         """
-        self.logger.info(f"\n[COMMAND] User: '{command}'")
+        transcript = []
+        
+        def log(msg: str):
+            self.logger.info(msg)
+            transcript.append(msg)
+
+        log(f"\n[COMMAND] User: '{command}'")
 
         # 1. Metacognition: Safety Check
-        self.logger.info("[1] Metacognition: Critiquing intent...")
+        log("[1] Metacognition: Critiquing intent...")
         critique = await self.metacognition.critique_plan(command)
-        if critique.score < 0.5:
-            self.logger.warning(f"Safety Block: {critique.flaws}")
-            return
+        if critique.score < 0.2 and critique.safety_violations:
+            msg = f"Safety Block: {critique.safety_violations}"
+            self.logger.warning(msg)
+            transcript.append(msg)
+            return "\n".join(transcript)
+        elif critique.score < 0.2:
+             msg = f"Low Quality Plan (Score {critique.score}): {critique.flaws}"
+             self.logger.warning(msg)
+             # Don't block hard on quality, just warn
+             transcript.append(f"[WARNING] {msg}")
 
         # 2. Autonomy: Permission Gate (Simplified Mapping)
         # Determine risk heuristically or via critique
         risk = ActionRisk.HIGH if "restart" in command or "delete" in command else ActionRisk.LOW
         
         if not await self.autonomy.request_action("execute_command", risk, command):
-            self.logger.warning("Autonomy Block: Permission Denied.")
-            return
+            msg = "Autonomy Block: Permission Denied."
+            self.logger.warning(msg)
+            transcript.append(msg)
+            return "\n".join(transcript)
 
         # 3. Assembly: Construct Reasoning Pipeline
-        self.logger.info("[2] Assembly: Building Model Pipeline...")
+        log("[2] Assembly: Building Model Pipeline...")
         pipeline = [
-            PipelineStep(name="Plan", model_selector="small", system_prompt="Create a plan."),
-            PipelineStep(name="Execute", model_selector="huge", system_prompt="execution logic")
+            PipelineStep(name="Plan", model_selector=self.ai.config.default_model, system_prompt="Create a plan."),
+            PipelineStep(name="Execute", model_selector=self.ai.config.default_model, system_prompt="execution logic")
         ]
         report = await self.assembly.run_pipeline(pipeline, command)
         
-        self.logger.info(f"[3] Execution Result: {report.final_output}")
+        log(f"[3] Execution Result: {report.final_output}")
         
         # 4. Memory: Log Success
         await self.memory.add_memory(MemoryType.EPHEMERAL, f"Executed: {command}", {})
+        
+        return "\n".join(transcript)
 
     # --- Simulation & Prediction ---
 
@@ -103,11 +149,24 @@ class STANSupernova:
 
     async def analyze_cluster_future(self):
         self.logger.info("\n[PREDICTION] Forecasting Node Health...")
-        # Inject dummy telemetry
-        self.forecasting.ingest_telemetry("thor", TelemetryPoint(timestamp=time.time(), cpu_usage=50, gpu_usage=90, vram_usage_gb=20, temp_c=85, tasks_running=5))
         
-        forecast = await self.forecasting.predict_node_state("thor", horizon_seconds=300)
-        self.logger.info(f"Forecast for Thor: Failed Prob={forecast.failure_probability}")
+        # Real Telemetry from Odin
+        import psutil
+        cpu = psutil.cpu_percent()
+        mem = psutil.virtual_memory().percent
+        # GPU/VRAM still 0/simulated until we have nvml
+        
+        self.forecasting.ingest_telemetry("odin", TelemetryPoint(
+            timestamp=time.time(), 
+            cpu_usage=cpu, 
+            gpu_usage=0, 
+            vram_usage_gb=0, 
+            temp_c=45, # Placeholder temp
+            tasks_running=len(psutil.pids())
+        ))
+        
+        forecast = await self.forecasting.predict_node_state("odin", horizon_seconds=300)
+        self.logger.info(f"Forecast for Odin: Failed Prob={forecast.failure_probability}")
         if forecast.failure_probability > 0.6:
             self.logger.warning("Recommendation: " + forecast.reasoning)
 
@@ -115,15 +174,20 @@ class STANSupernova:
 
     async def trigger_automation_chains(self):
         self.logger.info("\n[AUTOMATION] Checking Logic Chains...")
-        # Mock metrics
-        metrics = {"gpu": 95, "ram": 40}
+        
+        # Real metrics
+        import psutil
+        cpu = psutil.cpu_percent()
+        mem = psutil.virtual_memory().percent
+        
+        metrics = {"cpu": cpu, "ram": mem, "gpu": 0}
         events = ["HEARTBEAT"]
         
         # Add a test chain
         self.automation.load_chains([{
-            "name": "GPU Safety",
-            "triggers": [{"type": "threshold", "condition": "gpu > 90"}],
-            "actions": [{"type": "log", "payload": {"msg": "GPU Heat Warning!"}}]
+            "name": "High CPU Alert",
+            "triggers": [{"type": "threshold", "condition": "cpu > 90"}],
+            "actions": [{"type": "log", "payload": {"msg": "CPU Overload Warning!"}}]
         }])
         
         await self.automation.evaluate_state(metrics, events)

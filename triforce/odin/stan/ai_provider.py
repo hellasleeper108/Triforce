@@ -52,6 +52,28 @@ class AIProvider(abc.ABC):
         """Classify text into one of the provided labels."""
         pass
 
+    def set_active_model(self, model_name: str) -> bool:
+        """Sets the default model for generation."""
+        # Validate existence
+        if any(m.name == model_name for m in self.config.models):
+            self.logger.info(f"Switching active model to: {model_name}")
+            self.config.default_model = model_name
+            return True
+        self.logger.warning(f"Model {model_name} not found in config.")
+        return False
+        
+    def get_available_models(self) -> List[Dict[str, Any]]:
+        """Returns list of available models with metadata."""
+        return [
+            {
+                "name": m.name, 
+                "active": m.name == self.config.default_model,
+                "platform": m.ideal_platform,
+                "capabilities": m.capabilities
+            }
+            for m in self.config.models
+        ]
+
     def get_best_model(self, task_type: str = "generate", min_size_b: float = 0) -> str:
         """Selects the best available model from config based on constraints."""
         candidates = [
@@ -59,12 +81,9 @@ class AIProvider(abc.ABC):
             if task_type in m.capabilities and m.size_params_b >= min_size_b
         ]
         if not candidates:
-            self.logger.warning(f"No exact match for {task_type} > {min_size_b}B. Using default.")
+            # self.logger.warning(f"No exact match for {task_type} > {min_size_b}B. Using default.")
             return self.config.default_model
             
-        # Sort by size (assume larger is better for complex tasks, smaller for speed?)
-        # For now, pick smallest adequate model to save resources? 
-        # Or largest? Let's say we pick the one closest to min_size_b without going under.
         candidates.sort(key=lambda x: x.size_params_b)
         return candidates[0].name
 
@@ -83,8 +102,28 @@ class MockProvider(AIProvider):
     
     async def generate(self, prompt: str, system: Optional[str] = None, **kwargs) -> str:
         self.logger.info(f"Mock Generate: {prompt[:50]}...")
-        if "json" in kwargs.get("format", ""):
+        
+        # Handle Metacognition Critique
+        if system and "CRITIQUE" in system:
+            return json.dumps({
+                "score": 0.9, 
+                "flaws": [], 
+                "safety_violations": [],
+                "suggestion": "Plan looks safe."
+            })
+            
+        # Handle Metacognition Bias Check
+        if system and "BIAS" in system:
+            return json.dumps({
+                "detected_bias": None,
+                "severity": "low", 
+                "mitigation": "None"
+            })
+
+        if "json" in kwargs.get("format", "") or kwargs.get("json_format"):
+            # Generic JSON fallback if not matched above
             return '{"status": "mocked", "result": "success"}'
+            
         return "This is a mocked response from the AI provider. Beep boop."
 
     async def embed(self, text: str) -> List[float]:
@@ -96,11 +135,17 @@ class MockProvider(AIProvider):
 
 # --- Factory ---
 
+from triforce.odin.stan.gemini_provider import GeminiProvider
+
+# --- Factory ---
+
 class AIProviderFactory:
     @staticmethod
     def create(config: ProviderConfig) -> AIProvider:
         if config.type == "ollama":
             return OllamaProvider(config)
+        elif config.type == "gemini":
+            return GeminiProvider(config)
         elif config.type == "mock":
             return MockProvider(config)
         else:
@@ -118,4 +163,22 @@ DEFAULT_OLLAMA_CONFIG = ProviderConfig(
     ]
 )
 
-DEFAULT_MOCK_CONFIG = ProviderConfig(type="mock")
+DEFAULT_MOCK_CONFIG = ProviderConfig(
+    type="mock",
+    models=[
+        ModelConfig(name="mock-gpt-4", size_params_b=100.0, capabilities=["generate"], ideal_platform="cloud"),
+        ModelConfig(name="mock-local-7b", size_params_b=7.0, capabilities=["generate"], ideal_platform="gpu"),
+    ],
+    default_model="mock-gpt-4"
+)
+
+DEFAULT_GEMINI_CONFIG = ProviderConfig(
+    type="gemini",
+    models=[
+        ModelConfig(name="gemini-2.0-flash-exp", size_params_b=100.0, capabilities=["generate", "vision"], ideal_platform="cloud"),
+        ModelConfig(name="gemini-1.5-pro", size_params_b=100.0, capabilities=["generate", "vision"], ideal_platform="cloud"),
+        ModelConfig(name="text-embedding-004", size_params_b=0.1, capabilities=["embed"], ideal_platform="cloud"),
+    ],
+    default_model="gemini-2.0-flash-exp", # User requested Gemini 3 (using 2.0 Flash Exp as proxy)
+    default_embed_model="text-embedding-004"
+)

@@ -10,6 +10,7 @@ services:
     environment:
       - PORT=8080
       - API_TOKEN=${API_TOKEN:-supersecret}
+      - GEMINI_API_KEY=AIzaSyA0s-gyaQJ94G-2D0J-JGuqmhPzra24-Rg
       - HOSTNAME=odin-master
     volumes:
       - .:/app
@@ -46,7 +47,7 @@ services:
       - ODIN_URL=http://odin:8080
       - HOST_IP=thor-2
       - PORT=8000
-      - API_TOKEN=${API_TOKEN}
+      - API_TOKEN=${API_TOKEN:-supersecret}
       - HOSTNAME=thor-2
     volumes:
       - .:/app
